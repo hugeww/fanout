@@ -160,7 +160,7 @@ if [[ ${#need_cmd[@]} -gt 0 ]]; then
 fi
 
 echo "[2/6] 获取程序"
-REPO="${REPO:-byJoey/fanout}"
+REPO="${REPO:-hugeww/fanout}"
 ARCH=$(uname -m)
 case "$ARCH" in
   x86_64)  GOARCH=amd64 ;;
@@ -286,8 +286,5 @@ echo
 echo "  输入 f 打开管理菜单"
 echo
 echo "  ────────────────────────────────"
-echo "  交流群  https://t.me/+ft-zI76oovgwNmRh"
-echo "  油管    https://youtube.com/@joeyblog"
-echo "  博客    https://joeyblog.net"
-echo "  项目    https://github.com/byJoey/fanout"
+echo "  项目    https://github.com/hugeww/fanout"
 echo

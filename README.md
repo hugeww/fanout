@@ -8,11 +8,7 @@
 节点链接有三种管法：同机装了 3x-ui 或 xray-cf-lite 就接管它们的入站，
 都没装则 fanout 自己跑 Xray，建站、改站、发链接都在同一个界面里完成。
 
-![主界面](https://images.joeyblog.net/2026/7/27/fanout-dashboard.png)
-
 四条隧道跑在一台机器上，四个端口对应四个国家的出口，母机自己的 IP 不受影响：
-
-![出口验证](https://images.joeyblog.net/2026/7/26/fanout-6-exit-ip.png)
 
 ## 原理
 
@@ -31,7 +27,7 @@ SOCKS5 监听在母机，出站连接用 `setns` 切进对应 netns 建立。
 需要 root，Linux（依赖 netns）。
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/hugeww/fanout/main/install.sh)
 ```
 
 会自动下载对应架构的预编译二进制。也可以 clone 仓库后在源码目录运行同一个脚本，
@@ -47,7 +43,7 @@ Xray 到 `/var/lib/fanout/bin/`，装了则跳过，入站交给面板管。
 
 ```bash
 apk add bash curl
-bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/hugeww/fanout/main/install.sh)
 ```
 
 另外 fanout 要在 netns 里跑 openvpn，**宿主必须放开 `/dev/net/tun`**。
@@ -55,8 +51,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/byJoey/fanout/main/install.s
 Operation not permitted 的话，这台机器用不了，跟发行版无关。
 
 装完敲 `f` 打开管理菜单：
-
-![管理菜单](https://images.joeyblog.net/2026/7/26/fanout-7-menu.png)
 
 装完会打印管理界面地址、访问路径和口令：
 
@@ -76,21 +70,15 @@ Operation not permitted 的话，这台机器用不了，跟发行版无关。
 拉起隧道、为每个出口复制一份节点链接并绑好，进度按目标逐条回报。原来要手点
 五步跨两栏的事，现在一次点击十几秒完成。
 
-![新建出口](https://images.joeyblog.net/2026/7/27/fanout-wizard.png)
-
 每行右侧两个按钮：换一个节点（出口 IP 变、端口不变，已分发的客户端配置不用改），
 或者停掉这个出口。
 
 点节点名进详情，可以改端口、备注、启停，管理客户端，以及改绑到别的出口：
 
-![节点详情](https://images.joeyblog.net/2026/7/27/fanout-detail.png)
-
 一个入站可以挂多套客户端凭据，分发给不同的人；每套都能单独重置，
 重置后旧链接立即失效。
 
 「导出链接」一次性拿到所有节点链接：
-
-![导出链接](https://images.joeyblog.net/2026/7/27/fanout-export.png)
 
 ### 节点链接从哪来
 
@@ -98,8 +86,6 @@ Operation not permitted 的话，这台机器用不了，跟发行版无关。
 开了 SSL 也能识别。没装 3x-ui 时 fanout 自己跑一个 Xray，界面上多一个「新建节点」
 按钮，可以选协议（VLESS / VMess / Trojan）、传输（TCP / WebSocket / gRPC /
 HTTPUpgrade / XHTTP）和安全层（无 / TLS / REALITY）。
-
-![新建节点](https://images.joeyblog.net/2026/7/27/fanout-newnode.png)
 
 REALITY 的密钥对和 shortId 自动生成；TLS 不填证书就生成自签的，分享链接会带上
 证书指纹让客户端固定信任。也可以填自己的证书路径。
@@ -167,11 +153,3 @@ netns 仍能经母机 NAT 出网，只看通不通会漏判。连续两次不符
 节点来自 [VPN Gate](https://www.vpngate.net/)（筑波大学的学术实验项目），
 本工具只是调用其公开的节点列表并用官方 openvpn 客户端连接，不修改也不代理其服务。
 使用时请遵守 VPN Gate 的条款和你所在地的法律。
-
-## 交流
-
-- 交流群：<https://t.me/+ft-zI76oovgwNmRh>
-- 视频教程：<https://youtube.com/@joeyblog>
-- 博客：<https://joeyblog.net>
-
-用着有问题、或者想要什么功能，去群里说或提 issue。
