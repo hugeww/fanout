@@ -25,6 +25,7 @@ const (
 type ProxyUser struct {
 	User            string `json:"user"`
 	Pass            string `json:"pass"`
+	Tag             string `json:"tag,omitempty"`
 	TunnelSlots     []int  `json:"tunnel_slots"`
 	Strategy        string `json:"strategy,omitempty"`
 	IntervalSeconds int    `json:"interval_seconds,omitempty"`
