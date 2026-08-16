@@ -32,14 +32,21 @@ fi
 #
 # 重装时不覆盖用户已经改过的端口：除非这次显式指定了 WEB_PORT，
 # 否则沿用原值，免得重装一次把人家改好的端口打回默认。
+# TLS 开关同理：显式给 ENABLE_TLS=0/1 才改，否则沿用现值。
 seed_settings() {
   local f="${WORK_DIR}/settings.json"
-  if [[ -f "$f" ]] && [[ -z "${WEB_PORT_EXPLICIT:-}" ]]; then
-    local cur
-    cur=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$f" | head -1)
-    [[ -n $cur ]] && { WEB_PORT="$cur"; return; }
+  local tls=""
+  if [[ -f "$f" ]]; then
+    [[ -z "${WEB_PORT_EXPLICIT:-}" ]] && WEB_PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$f" | head -1)
+    tls=$(sed -n 's/.*"tls"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' "$f" | head -1)
   fi
-  printf '{\n  "port": %s,\n  "listen_addr": ""\n}\n' "$WEB_PORT" > "$f"
+  [[ -n $WEB_PORT ]] || WEB_PORT="${WEB_PORT:-8899}"
+  [[ -z "${ENABLE_TLS:-}" ]] && ENABLE_TLS="$tls"
+  if [[ "$ENABLE_TLS" == "1" || "$ENABLE_TLS" == "true" ]]; then
+    printf '{\n  "port": %s,\n  "listen_addr": "",\n  "tls": true\n}\n' "$WEB_PORT" > "$f"
+  else
+    printf '{\n  "port": %s,\n  "listen_addr": ""\n}\n' "$WEB_PORT" > "$f"
+  fi
   chmod 600 "$f"
 }
 
@@ -187,10 +194,64 @@ else
   rm -rf "$TMP"
 fi
 
-echo "[3/5] 跳过 Xray"
+echo "[3/6] 跳过 Xray"
 echo "      Xray、3x-ui 和 xray-cf-lite 集成已禁用"
 
-echo "[4/5] 放行转发"
+echo "[4/6] HTTPS 管理界面"
+# 交互式询问是否启用 HTTPS；非交互终端（管道跑）由 ENABLE_TLS 环境变量决定
+ask_tls() {
+  [[ -n "${ENABLE_TLS:-}" ]] && return
+  if [[ -t 0 ]]; then
+    printf "      启用 HTTPS 管理界面？[y/N] "
+    read -r ans
+    case "$ans" in
+      y|Y|yes|YES) ENABLE_TLS=1 ;;
+      *) ENABLE_TLS=0 ;;
+    esac
+  else
+    ENABLE_TLS=0
+  fi
+}
+
+# 让用户选证书来源：Let's Encrypt 常见路径，或手动给路径
+ask_tls_cert() {
+  local cert key
+  printf "      证书文件路径（留空用默认）[%s]: " "${LE_CERT_DEFAULT:-/etc/letsencrypt/live/<域名>/fullchain.pem}"
+  read -r cert
+  [[ -n "$cert" ]] || cert="${LE_CERT_DEFAULT:-}"
+  printf "      私钥文件路径（留空用默认）[%s]: " "${LE_KEY_DEFAULT:-/etc/letsencrypt/live/<域名>/privkey.pem}"
+  read -r key
+  [[ -n "$key" ]] || key="${LE_KEY_DEFAULT:-}"
+  if [[ ! -f "$cert" ]]; then
+    echo "      证书文件不存在: $cert" >&2
+    return 1
+  fi
+  if [[ ! -f "$key" ]]; then
+    echo "      私钥文件不存在: $key" >&2
+    return 1
+  fi
+  install -m 600 "$cert" "${WORK_DIR}/web.crt"
+  install -m 600 "$key"  "${WORK_DIR}/web.key"
+  echo "      已安装证书: $cert"
+  echo "      已安装私钥: $key"
+  echo "      提示：管理界面将是 https://<本机IP>:${WEB_PORT}/<路径>/"
+  echo "            证书与访问域名不匹配会提示不安全，请用证书对应的域名访问。"
+}
+
+ask_tls
+if [[ "$ENABLE_TLS" == "1" || "$ENABLE_TLS" == "true" ]]; then
+  mkdir -p "$WORK_DIR"
+  if [[ -f "${WORK_DIR}/web.crt" && -f "${WORK_DIR}/web.key" ]]; then
+    echo "      已有证书，沿用（重传请删 ${WORK_DIR}/web.crt / web.key 后重跑）"
+  elif ! ask_tls_cert; then
+    echo "      证书不可用，继续按 HTTP 安装（之后可在设置面板上传）" >&2
+    ENABLE_TLS=0
+  fi
+else
+  echo "      保持 HTTP（之后可在设置面板上传证书开启 HTTPS）"
+fi
+
+echo "[5/6] 放行转发"
 sysctl -qw net.ipv4.ip_forward=1
 grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf 2>/dev/null \
   || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
@@ -203,7 +264,7 @@ if ! iptables -C FORWARD -d 10.99.0.0/16 -j ACCEPT 2>/dev/null; then
 fi
 command -v netfilter-persistent >/dev/null && netfilter-persistent save >/dev/null 2>&1 || true
 
-echo "[4/5] 安装服务"
+echo "[5/6] 安装服务"
 # 管理菜单
 if [[ -f f.sh ]]; then
   install -m 755 f.sh /usr/local/bin/f
@@ -219,7 +280,7 @@ seed_settings
 svc_install
 svc_enable_start
 
-echo "[5/5] 就绪"
+echo "[6/6] 就绪"
 sleep 3
 svc_is_active && echo "      服务运行中（${INIT_SYS}）" || {
   echo "      服务启动失败，看 $(svc_logs_hint)" >&2
@@ -238,8 +299,11 @@ BP=$(cat "${WORK_DIR}/basepath" 2>/dev/null || true)
 ACTUAL_PORT=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' \
   "${WORK_DIR}/settings.json" 2>/dev/null | head -1)
 [[ -n $ACTUAL_PORT ]] && WEB_PORT="$ACTUAL_PORT"
+# settings.json 里有没有 tls:true，决定提示用 https 还是 http
+SCHEME=http
+grep -q '"tls"[[:space:]]*:[[:space:]]*true' "${WORK_DIR}/settings.json" 2>/dev/null && SCHEME=https
 echo
-echo "  管理界面  http://${IP}:${WEB_PORT}/${BP}/"
+echo "  管理界面  ${SCHEME}://${IP}:${WEB_PORT}/${BP}/"
 echo "  访问口令  $(cat "${WORK_DIR}/password" 2>/dev/null || echo "见 ${WORK_DIR}/password")"
 echo
 echo "  路径和口令都是随机生成的，也可以随时查看："
