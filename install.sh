@@ -238,14 +238,61 @@ ask_tls_cert() {
   echo "            证书与访问域名不匹配会提示不安全，请用证书对应的域名访问。"
 }
 
+# 没有现成证书时生成一张自签的先用着，之后可在设置面板替换成正式证书。
+# 需要 openssl。CN 用域名/IP 让证书名看着对，但不影响浏览器信任判定。
+gen_self_signed_cert() {
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "      找不到 openssl，无法生成自签证书" >&2
+    return 1
+  fi
+  local cn="${TLS_CN:-}"
+  if [[ -z "$cn" && -t 0 ]]; then
+    printf "      证书域名/CN（留空用 IP）: "
+    read -r cn
+  fi
+  [[ -n "$cn" ]] || cn=$(curl -s --max-time 5 http://api.ipify.org || hostname -f || echo localhost)
+  if ! openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+      -keyout "${WORK_DIR}/web.key" -out "${WORK_DIR}/web.crt" \
+      -subj "/CN=${cn}" >/dev/null 2>&1; then
+    echo "      生成自签证书失败" >&2
+    return 1
+  fi
+  chmod 600 "${WORK_DIR}/web.key" "${WORK_DIR}/web.crt"
+  echo "      已生成自签证书（CN=${cn}，有效期 365 天）"
+  echo "      提示：自签证书浏览器不信任，首次访问会提示不安全；"
+  echo "            之后可在设置面板上传正式证书（如 CF Origin 证书）替换。"
+}
+
 ask_tls
 if [[ "$ENABLE_TLS" == "1" || "$ENABLE_TLS" == "true" ]]; then
   mkdir -p "$WORK_DIR"
   if [[ -f "${WORK_DIR}/web.crt" && -f "${WORK_DIR}/web.key" ]]; then
     echo "      已有证书，沿用（重传请删 ${WORK_DIR}/web.crt / web.key 后重跑）"
-  elif ! ask_tls_cert; then
-    echo "      证书不可用，继续按 HTTP 安装（之后可在设置面板上传）" >&2
-    ENABLE_TLS=0
+  else
+    # 有现成证书就让它填路径；没有（或非交互）就自动生成自签的
+    have_cert=""
+    if [[ -t 0 ]]; then
+      printf "      已有证书文件（Cert/Key）？[y/N] "
+      read -r have_cert
+    fi
+    case "$have_cert" in
+      y|Y|yes|YES)
+        if ask_tls_cert; then
+          :
+        else
+          echo "      证书不可用，继续按 HTTP 安装（之后可在设置面板上传）" >&2
+          ENABLE_TLS=0
+        fi
+        ;;
+      *)
+        if gen_self_signed_cert; then
+          :
+        else
+          echo "      生成自签证书失败，继续按 HTTP 安装（之后可在设置面板上传）" >&2
+          ENABLE_TLS=0
+        fi
+        ;;
+    esac
   fi
 else
   echo "      保持 HTTP（之后可在设置面板上传证书开启 HTTPS）"
