@@ -88,9 +88,9 @@ main{padding:14px 16px 40px;max-width:1180px;margin:0 auto}
 .unified .utop{display:flex;align-items:center;gap:10px;padding:10px 12px}
 .unified h2{font-size:12px;margin:0;font-weight:600}
 .unified .udetail{border-top:1px solid var(--line);padding:12px}
-.unified .uform{display:grid;grid-template-columns:150px 150px 1fr auto;gap:10px;align-items:end}
-.unified .uform .ef input,.unified .uform .ef select{width:100%}
-.unified .uhint{margin:9px 0 0;color:var(--dim);font-size:11px}
+.unified .uform{display:flex;align-items:center;gap:10px}
+.unified .uform .ef input,.unified .uform .ef select{width:150px}
+.unified .uhint{margin:0;color:var(--dim);font-size:11px;flex:1}
 .proxyusers{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 .proxyusers .ptop{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .proxyusers h3{font-size:12px;margin:0;font-weight:600;color:var(--dim)}
