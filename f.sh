@@ -110,7 +110,9 @@ show_info() {
   echo -e "  版本      $("$BIN" -version 2>/dev/null || echo '-')"
   echo -e "  开机自启  $(svc_enabled_text)"
   echo
-  echo -e "  ${B}管理地址  http://${ip}:${port}/${bp}/${N}"
+  local scheme=http
+  grep -q '"tls"[[:space:]]*:[[:space:]]*true' "$WORK_DIR/settings.json" 2>/dev/null && scheme=https
+  echo -e "  ${B}管理地址  ${scheme}://${ip}:${port}/${bp}/${N}"
   echo -e "  ${B}访问口令  ${pw}${N}"
   echo
 
@@ -254,6 +256,127 @@ show_links() {
   echo -e "  ${D}用着有问题、或者想要什么功能，去群里说或提 issue。${N}"
 }
 
+# settings.json 里的 tls 开关。传 1 开 HTTPS、0 关，空参数只读。
+# 直接重写整个文件保证 JSON 整洁，同时保留现有 port/listen_addr。
+set_tls() {
+  local f="$WORK_DIR/settings.json"
+  local want="${1:-}"
+  local port listen tls
+  port=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' "$f" 2>/dev/null | head -1)
+  listen=$(sed -n 's/.*"listen_addr"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$f" 2>/dev/null | head -1)
+  tls=false
+  if [[ -n "$want" ]]; then
+    [[ "$want" == "1" ]] && tls=true
+    [[ -n $port ]] || port=8899
+    [[ -n $listen ]] || listen=""
+    printf '{\n  "port": %s,\n  "listen_addr": "%s",\n  "tls": %s\n}\n' \
+      "$port" "$listen" "$tls" > "$f"
+    chmod 600 "$f"
+  fi
+  grep -q '"tls"[[:space:]]*:[[:space:]]*true' "$f" 2>/dev/null && echo on || echo off
+}
+
+cert_info() {
+  [[ -f "$WORK_DIR/web.crt" ]] || { echo "  没有证书（web.crt）"; return; }
+  openssl x509 -in "$WORK_DIR/web.crt" -noout -subject -dates 2>/dev/null \
+    | sed 's/^/  /'
+}
+
+gen_cert_here() {
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo -e "  ${R}找不到 openssl${N}"; return
+  fi
+  local cn
+  read -rp "  证书域名/CN（留空用本机 IP）: " cn
+  if [[ -z $cn ]]; then
+    cn=$(curl -s --max-time 5 http://api.ipify.org 2>/dev/null || hostname -f || echo localhost)
+  fi
+  if ! openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+      -keyout "$WORK_DIR/web.key" -out "$WORK_DIR/web.crt" \
+      -subj "/CN=${cn}" >/dev/null 2>&1; then
+    echo -e "  ${R}生成失败${N}"; return
+  fi
+  chmod 600 "$WORK_DIR/web.key" "$WORK_DIR/web.crt"
+  set_tls 1
+  svc_restart >/dev/null 2>&1
+  echo -e "  ${G}已生成自签证书（CN=${cn}）并启用 HTTPS${N}"
+}
+
+manage_cert() {
+  local cur
+  cur=$(set_tls)
+  echo
+  if [[ $cur == on ]]; then
+    echo -e "  HTTPS 已启用（端口 $(web_port)）"
+  else
+    echo -e "  HTTPS 未启用（当前 http://$(web_port)/）"
+  fi
+  echo
+  if [[ -f "$WORK_DIR/web.crt" ]]; then
+    echo -e "  当前证书："
+    cert_info
+  else
+    echo -e "  ${D}暂无证书${N}"
+  fi
+  echo
+  echo "  1) 上传证书（Cert + Key）"
+  echo "  2) 生成自签证书"
+  echo "  3) 启用 HTTPS"
+  echo "  4) 停用 HTTPS（回 http）"
+  echo "  5) 删除证书"
+  echo "  0) 返回"
+  read -rp "  选择: " c
+  case "$c" in
+    1)
+      read -rp "  证书文件路径: " cert
+      read -rp "  私钥文件路径: " key
+      if [[ ! -f $cert || ! -f $key ]]; then
+        echo -e "  ${R}文件不存在${N}"; return
+      fi
+      # 先校验配对，不配对不上就装
+      if ! openssl x509 -noout -in "$cert" >/dev/null 2>&1; then
+        echo -e "  ${R}证书文件无效${N}"; return
+      fi
+      if ! openssl x509 -in "$cert" -noout -pubkey 2>/dev/null \
+           | openssl md5 | awk '{print $2}' | grep -q \
+           "$(openssl pkey -in "$key" -pubout 2>/dev/null | openssl md5 | awk '{print $2}')"; then
+        echo -e "  ${R}证书和私钥不匹配${N}"; return
+      fi
+      install -m 600 "$cert" "$WORK_DIR/web.crt"
+      install -m 600 "$key"  "$WORK_DIR/web.key"
+      set_tls 1
+      svc_restart >/dev/null 2>&1
+      echo -e "  ${G}证书已安装并启用 HTTPS${N}"
+      ;;
+    2)
+      gen_cert_here
+      ;;
+    3)
+      if [[ -f "$WORK_DIR/web.crt" && -f "$WORK_DIR/web.key" ]]; then
+        set_tls 1
+        svc_restart >/dev/null 2>&1
+        echo -e "  ${G}已启用 HTTPS${N}"
+      else
+        echo -e "  ${R}没有证书，先上传或生成${N}"
+      fi
+      ;;
+    4)
+      set_tls 0
+      svc_restart >/dev/null 2>&1
+      echo -e "  ${G}已停用 HTTPS，回到 http://$(web_port)/${N}"
+      ;;
+    5)
+      read -rp "  确认删除证书？[y/N]: " yes
+      [[ ${yes,,} == y ]] || { echo "  已取消"; return; }
+      rm -f "$WORK_DIR/web.crt" "$WORK_DIR/web.key"
+      set_tls 0
+      svc_restart >/dev/null 2>&1
+      echo -e "  ${G}证书已删除，回 http${N}"
+      ;;
+    0|*) ;;
+  esac
+}
+
 # 老版本把 -web 写死在服务文件里，和 settings.json 互相拽回旧值。
 # 更新时把端口搬进配置再从服务文件里摘掉，之后只认一处。
 migrate_port_to_settings() {
@@ -329,10 +452,11 @@ menu() {
     echo "   5) 隧道列表      6) 连接信息"
     echo
     echo "   7) 改端口        8) 改口令"
-    echo "   9) 改访问路径   10) 开机自启开关"
+    echo "   9) 改访问路径   10) 证书管理"
+    echo "  11) 开机自启开关"
     echo
-    echo "  11) 更新         12) 卸载"
-    echo "  13) 项目信息"
+    echo "  12) 更新         13) 卸载"
+    echo "  14) 项目信息"
     echo "   0) 退出"
     echo -e "${D}  ─────────────────────────────${N}"
     read -rp "  选择: " choice
@@ -347,7 +471,8 @@ menu() {
       7) change_port; pause ;;
       8) reset_password; pause ;;
       9) reset_basepath; pause ;;
-      10)
+      10) manage_cert; pause ;;
+      11)
         if svc_is_enabled; then
           svc_disable
           echo -e "\n  ${Y}已关闭开机自启${N}"
@@ -356,9 +481,9 @@ menu() {
           echo -e "\n  ${G}已开启开机自启${N}"
         fi
         pause ;;
-      11) do_update; pause ;;
-      13) show_links; pause ;;
-      12) do_uninstall; pause ;;
+      12) do_update; pause ;;
+      14) show_links; pause ;;
+      13) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
@@ -377,10 +502,11 @@ case "${1:-}" in
   info)     show_info ;;
   list)     list_tunnels ;;
   update)   do_update ;;
+  cert)     manage_cert ;;
   uninstall) do_uninstall ;;
   "")       menu ;;
   *)
-    echo "用法: f [start|stop|restart|status|log|info|list|update|uninstall]"
+    echo "用法: f [start|stop|restart|status|log|info|list|update|cert|uninstall]"
     echo "不带参数进入交互菜单"
     ;;
 esac
