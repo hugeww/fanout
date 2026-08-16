@@ -73,6 +73,18 @@ func main() {
 		go mgr.ReconcileOutbounds()
 	}
 
+	proxyConfigLoaded := true
+	if err := mgr.LoadProxyConfig(); err != nil {
+		proxyConfigLoaded = false
+		log.Printf("load proxy config failed: %v", err)
+	}
+	if proxyConfigLoaded {
+		if err := mgr.StartProxy(); err != nil {
+			log.Printf("start proxy failed: %v", err)
+		}
+	} else {
+		log.Printf("proxy disabled until a valid proxy configuration is loaded")
+	}
 	go mgr.WatchHealth()
 
 	stop := make(chan os.Signal, 1)
@@ -93,6 +105,8 @@ func main() {
 	mux.HandleFunc("/api/stop", apiStop(mgr))
 	mux.HandleFunc("/api/swap", apiSwap(mgr))
 	mux.HandleFunc("/api/cred", apiCred(mgr))
+	mux.HandleFunc("/api/proxy", apiProxy(mgr))
+	mux.HandleFunc("/api/proxy/user", apiProxyUser(mgr))
 	mux.HandleFunc("/api/refresh", apiRefresh(mgr))
 	mux.HandleFunc("/api/regions", apiRegions(mgr))
 	mux.HandleFunc("/api/provision", apiProvision(mgr))

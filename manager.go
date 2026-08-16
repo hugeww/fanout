@@ -18,14 +18,34 @@ type Manager struct {
 	workDir  string
 	maxSlots int
 	jobs     JobStore
+
+	// tunnelOps serializes tunnel setup and teardown.
+	// A deleted tunnel must not be recreated by a concurrent bringUp.
+	tunnelOpsMu sync.Mutex
+	tunnelOps   map[*Tunnel]*sync.Mutex
 }
 
 func NewManager(maxSlots int, workDir string) *Manager {
 	return &Manager{
-		tunnels:  map[int]*Tunnel{},
-		workDir:  workDir,
-		maxSlots: maxSlots,
+		tunnels:   map[int]*Tunnel{},
+		workDir:   workDir,
+		maxSlots:  maxSlots,
+		tunnelOps: map[*Tunnel]*sync.Mutex{},
 	}
+}
+
+func (m *Manager) tunnelOp(t *Tunnel) *sync.Mutex {
+	m.tunnelOpsMu.Lock()
+	defer m.tunnelOpsMu.Unlock()
+	if m.tunnelOps == nil {
+		m.tunnelOps = map[*Tunnel]*sync.Mutex{}
+	}
+	if op := m.tunnelOps[t]; op != nil {
+		return op
+	}
+	op := &sync.Mutex{}
+	m.tunnelOps[t] = op
+	return op
 }
 
 // RefreshNodes 重新拉取节点列表。
@@ -63,11 +83,22 @@ func (m *Manager) Tunnels() []*Tunnel {
 // freeSlot 找一个未占用的槽位。槽位同时决定端口与网段。
 func (m *Manager) freeSlot() (int, error) {
 	for i := 1; i <= m.maxSlots; i++ {
-		if _, used := m.tunnels[i]; !used {
-			return i, nil
+		if _, used := m.tunnels[i]; used {
+			continue
 		}
+		if m.proxySlotBusy(i) {
+			continue
+		}
+		return i, nil
 	}
 	return 0, fmt.Errorf("槽位已满（上限 %d）", m.maxSlots)
+}
+
+func (m *Manager) proxySlotBusy(slot int) bool {
+	p := proxyFor(m)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.tunnelConns[slot] > 0
 }
 
 // Start 为指定节点开一条隧道，返回分配到的本地端口。
@@ -187,7 +218,7 @@ func (m *Manager) tryCandidates(t *Tunnel, notify bool) bool {
 		}
 
 		err := m.tryNode(t)
-		if err == nil {
+		if err == nil && m.tunnelActive(t) {
 			t.Status = "up"
 			t.Err = ""
 			if serr := m.saveState(); serr != nil {
@@ -218,6 +249,10 @@ func (m *Manager) tunnelActive(t *Tunnel) bool {
 
 // tryNode 尝试用当前节点把隧道拉起来。
 func (m *Manager) tryNode(t *Tunnel) error {
+	op := m.tunnelOp(t)
+	op.Lock()
+	defer op.Unlock()
+
 	if err := t.setupNetns(); err != nil {
 		return err
 	}
@@ -279,7 +314,6 @@ func (m *Manager) candidatesFor(first Node) []Node {
 
 // Stop 停掉一条隧道并释放槽位。
 func (m *Manager) Stop(slot int) error {
-	invalidateInbounds()
 	m.mu.Lock()
 	t, ok := m.tunnels[slot]
 	if ok {
@@ -289,7 +323,14 @@ func (m *Manager) Stop(slot int) error {
 	if !ok {
 		return fmt.Errorf("槽位 %d 没有运行中的隧道", slot)
 	}
+
+	invalidateInbounds()
+	m.removeTunnelFromProxy(slot)
+
+	op := m.tunnelOp(t)
+	op.Lock()
 	t.stop()
+	op.Unlock()
 	if err := m.saveState(); err != nil {
 		log.Printf("保存状态失败: %v", err)
 	}
@@ -414,8 +455,64 @@ func (m *Manager) syncCred(t *Tunnel) {
 
 // Shutdown 停掉运行态但保留状态文件，让下次启动能恢复同样的隧道。
 func (m *Manager) Shutdown() {
+	// StopProxy waits for all established SOCKS5 relays. During process shutdown,
+	// that wait can prevent Tunnel cleanup indefinitely. Stop accepting first;
+	// main exits immediately afterwards and the OS reclaims existing relays.
+	m.stopProxyListener()
 	for _, t := range m.Tunnels() {
+		op := m.tunnelOp(t)
+		op.Lock()
 		t.stop()
+		op.Unlock()
+	}
+}
+
+func (m *Manager) stopProxyListener() {
+	p := proxyFor(m)
+	p.mu.Lock()
+	ln := p.ln
+	p.ln = nil
+	p.mu.Unlock()
+	if ln != nil {
+		_ = ln.Close()
+	}
+}
+
+// removeTunnelFromProxy removes a stopped Tunnel from the unified-entry
+// routing table. A user with no remaining routes is removed too, so invalid
+// credentials are rejected during SOCKS5 authentication rather than failing
+// only after a request is accepted.
+func (m *Manager) removeTunnelFromProxy(slot int) {
+	p := proxyFor(m)
+	cfg := p.Config()
+	users := make([]ProxyUser, 0, len(cfg.Users))
+	changed := false
+	for _, user := range cfg.Users {
+		slots := make([]int, 0, len(user.TunnelSlots))
+		for _, candidate := range user.TunnelSlots {
+			if candidate == slot {
+				changed = true
+				continue
+			}
+			slots = append(slots, candidate)
+		}
+		if len(slots) == 0 && len(user.TunnelSlots) != 0 {
+			changed = true
+			continue
+		}
+		user.TunnelSlots = slots
+		users = append(users, user)
+	}
+	if !changed {
+		return
+	}
+	cfg.Users = users
+	// Do not use SetProxyConfig here: it waits for long-lived SOCKS5 sessions,
+	// which must not block deleting a Tunnel. replaceConfig is atomic for new
+	// requests and the file is persisted for the next startup.
+	p.replaceConfig(cfg)
+	if err := m.saveProxyConfig(cfg); err != nil {
+		log.Printf("save unified SOCKS5 route config: %v", err)
 	}
 }
 

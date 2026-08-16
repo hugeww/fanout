@@ -1,3 +1,6 @@
 fanout
 *.tar.gz
 *.log
+.gomodcache
+.gocache
+.idea

@@ -84,6 +84,25 @@ main{padding:14px 16px 40px;max-width:1180px;margin:0 auto}
 .empty button{margin-top:14px}
 .jobs{margin-bottom:12px}
 .job{border:1px solid var(--line);border-radius:6px;background:var(--panel);
+}.unified{border:1px solid var(--line);border-radius:6px;background:var(--panel);margin-bottom:12px;overflow:hidden}
+.unified .utop{display:flex;align-items:center;gap:10px;padding:10px 12px}
+.unified h2{font-size:12px;margin:0;font-weight:600}
+.unified .udetail{border-top:1px solid var(--line);padding:12px}
+.unified .uform{display:grid;grid-template-columns:150px 150px 1fr auto;gap:10px;align-items:end}
+.unified .uform .ef input,.unified .uform .ef select{width:100%}
+.unified .uhint{margin:9px 0 0;color:var(--dim);font-size:11px}
+.proxyusers{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+.proxyusers .ptop{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.proxyusers h3{font-size:12px;margin:0;font-weight:600;color:var(--dim)}
+.puser{display:grid;grid-template-columns:minmax(120px,180px) 1fr auto;align-items:center;gap:10px;border:1px solid var(--line);border-radius:4px;padding:8px 10px;margin-bottom:7px;background:#0e1116}
+.puser b{font-size:12px}.pmeta{font-size:11px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bindform{margin-top:10px;padding:12px;border:1px solid var(--accent);border-radius:4px;background:rgba(74,158,218,.06)}
+.bindform .bindtop{display:flex;align-items:center;gap:10px;margin-bottom:10px}.bindform .bindtop b{font-size:12px}
+.bindfields{display:grid;grid-template-columns:repeat(3,minmax(130px,1fr));gap:10px;align-items:end}
+.tunnelpick{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:6px;margin-top:11px}
+.tunnelpick label{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:4px;padding:6px 8px;font-size:11px;background:#0e1116}
+.tunnelpick label.off{opacity:.48}.tunnelpick small{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bindfoot{display:flex;align-items:center;gap:8px;margin-top:12px}.conflict{color:var(--bad);font-size:11px}.job{
   padding:10px 12px;margin-bottom:8px}
 .job .top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .job .top strong{font-weight:600;font-size:12px}
@@ -134,6 +153,7 @@ label.f>span{display:block;color:var(--dim);font-size:11px;margin-bottom:6px}
 select,input[type=search],input[type=text]{font:inherit;background:#0e1116;
   border:1px solid var(--line);color:var(--text);border-radius:4px;
   padding:5px 8px;width:100%}
+.unified input[type=password]{font:inherit;background:#0e1116;border:1px solid var(--line);color:var(--text);border-radius:4px;padding:5px 8px;width:100%}
 select:focus,input[type=search]:focus,input[type=text]:focus{outline:none;border-color:var(--accent)}
 .stepper input[type=text]{width:56px;text-align:center;font:inherit;background:transparent;
   border:0;border-left:1px solid var(--line);border-right:1px solid var(--line);
@@ -207,6 +227,24 @@ textarea:focus{outline:none;border-color:var(--accent)}
 <main>
   <div class="jobs" id="jobs"></div>
 
+  <section class="unified" id="unifiedEntry">
+    <div class="utop">
+      <span class="dot" id="unifiedDot"></span>
+      <h2>统一 SOCKS5 入口</h2>
+      <span class="count" id="unifiedStatus"></span>
+      <span class="spacer"></span>
+      <label class="chk"><input type="checkbox" id="unifiedEnabled"> 启用统一入口</label>
+    </div>
+    <div class="udetail" id="unifiedDetail" hidden>
+      <div class="uform">
+        <label class="ef"><span>监听地址</span><select id="unifiedListen"><option value="0.0.0.0">全部网卡 0.0.0.0</option><option value="127.0.0.1">仅本机 127.0.0.1</option></select></label>
+        <label class="ef"><span>监听端口</span><input id="unifiedPort" type="text" inputmode="numeric" placeholder="留空自动分配"></label>
+        <div class="uhint">所有用户共用一个端口，按用户名密码路由到各自专属的 Tunnel；同一 Tunnel 只能属于一个用户，请求失败不会回退到本机网络。</div>
+        <button id="unifiedSave">保存入口</button>
+      </div>
+      <div class="proxyusers" id="proxyUsers"></div>
+    </div>
+  </section>
   <div class="bar">
     <h2>出口</h2>
     <span class="count" id="ecount"></span>
@@ -539,6 +577,7 @@ async function copy(text){
 let view = {exits:[], direct:[], panel:'', backend:'', public_ip:''};
 let inbounds = [];
 
+let proxyConfig={mode:'per-tunnel',port:0,listen_addr:'0.0.0.0',users:[]},editingProxyUser='';function proxyExit(slot){return view.exits.find(function(e){return e.slot===slot;});}function proxyOwners(skip){const o={};(proxyConfig.users||[]).forEach(function(u){if(u.user!==skip)(u.tunnel_slots||[]).forEach(function(s){o[s]=u.user;});});return o;}function proxySlotText(slot){const e=proxyExit(slot);return e?(e.region||'Tunnel')+' #'+slot+' · '+(e.exit_ip||e.status):'Tunnel #'+slot;}function proxyStrategyText(u){const m={'round-robin':'轮询','random':'随机','time':'按时段'};return m[u.strategy||'round-robin']||u.strategy;}function renderProxy(){const enabled=proxyConfig.mode==='unified';$('#unifiedEnabled').checked=enabled;$('#unifiedDetail').hidden=false;$('#unifiedPort').value=proxyConfig.port||'';$('#unifiedListen').value=proxyConfig.listen_addr||'0.0.0.0';const dot=$('#unifiedDot');dot.className='dot '+(enabled?'up':'');$('#unifiedStatus').textContent=enabled?('端口 '+(proxyConfig.port||'-')):'未启用（保留各 Tunnel 独立入口）';renderProxyUsers();}function renderProxyUsers(){const box=$('#proxyUsers'),users=proxyConfig.users||[];let out='<div class="ptop"><h3>用户与专属 Tunnel 绑定</h3><span class="count">'+users.length+' 个用户</span><span class="spacer"></span><button id="proxyAdd">新建用户</button></div>';if(!users.length)out+='<div class="hint">暂无统一入口用户。Tunnel 是独占的，只能归属一个用户，不能共享。</div>';else out+=users.map(function(u){const slots=(u.tunnel_slots||[]).map(proxySlotText).join('、');return '<div class="puser"><b>'+esc(u.user)+'</b><span class="pmeta">'+esc(proxyStrategyText(u))+' · '+esc(slots)+'</span><span><button class="icon" data-proxy-edit="'+esc(u.user)+'" title="编辑">编辑</button><button class="icon danger" data-proxy-del="'+esc(u.user)+'" title="删除">'+ICON.trash+'</button></span></div>';}).join('');if(editingProxyUser!==null){const old=users.find(function(u){return u.user===editingProxyUser;})||{user:'',pass:'',tunnel_slots:[],strategy:'round-robin',interval_seconds:60};const owner=proxyOwners(old.user),slots=old.tunnel_slots||[];const picks=view.exits.map(function(e){const used=owner[e.slot],checked=slots.indexOf(e.slot)>=0,off=!!used&&!checked;return '<label class="'+(off?'off':'')+'"><input type="checkbox" class="proxy-slot" value="'+e.slot+'"'+(checked?' checked':'')+(off?' disabled':'')+'><span>'+esc(proxySlotText(e.slot))+'</span>'+(used?'<small>归属 '+esc(used)+'</small>':'')+'</label>';}).join('');out+='<div class="bindform"><div class="bindtop"><b>'+ (old.user?'编辑用户 '+esc(old.user):'新建用户') +'</b><span class="spacer"></span><button class="icon" id="proxyCancel" title="取消">'+ICON.x+'</button></div><div class="bindfields"><label class="ef"><span>用户名</span><input id="proxyUser" type="text" value="'+esc(old.user)+'"'+(old.user?' readonly':'')+'></label><label class="ef"><span>密码</span><input id="proxyPass" type="password" value="'+esc(old.pass)+'"></label><label class="ef"><span>调度策略</span><select id="proxyStrategy"><option value="round-robin">每次请求轮询</option><option value="random">随机</option><option value="time">按时段</option></select></label></div><label class="ef" id="proxyIntervalWrap" style="margin-top:10px"'+((old.strategy||'round-robin')==='time'?'':' hidden')+'><span>切换间隔（秒）</span><input id="proxyInterval" type="text" inputmode="numeric" value="'+(old.interval_seconds||60)+'"></label><div class="tunnelpick">'+(picks||'<span class="hint">请先创建并启动 Tunnel。</span>')+'</div><div class="bindfoot"><span class="conflict" id="proxyConflict"></span><span class="spacer"></span><button id="proxyUserSave" class="primary">保存用户</button></div></div>';}box.innerHTML=out;if(editingProxyUser!==null){$('#proxyStrategy').value=old.strategy||'round-robin';}}async function loadProxyConfig(){try{proxyConfig=await api('/api/proxy');renderProxy();}catch(e){$('#unifiedStatus').textContent='读取统一入口配置失败：'+e.message;}}$('#unifiedEnabled').onchange=function(){ $('#unifiedStatus').textContent='切换后点击保存生效';};$('#unifiedSave').onclick=async function(e){const port=$('#unifiedPort').value.trim();const cfg=Object.assign({},proxyConfig,{mode:$('#unifiedEnabled').checked?'unified':'per-tunnel',listen_addr:$('#unifiedListen').value,port:port?parseInt(port,10):0});e.target.disabled=true;try{proxyConfig=await api('/api/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});renderProxy();toast(cfg.mode==='unified'?'已启用统一入口':'已关闭统一入口（保留各 Tunnel 独立入口）');}catch(err){toast(err.message,true);}e.target.disabled=false;};document.addEventListener('click',async function(e){const add=e.target.closest('#proxyAdd'),edit=e.target.closest('[data-proxy-edit]'),del=e.target.closest('[data-proxy-del]'),cancel=e.target.closest('#proxyCancel'),save=e.target.closest('#proxyUserSave');if(add){editingProxyUser='';renderProxyUsers();return;}if(edit){editingProxyUser=edit.dataset.proxyEdit;renderProxyUsers();return;}if(cancel){editingProxyUser=null;renderProxyUsers();return;}if(del){const user=del.dataset.proxyDel;if(!confirm('确认删除用户 '+user+'？其绑定的 Tunnel 会释放'))return;try{proxyConfig=await api('/api/proxy/user?user='+encodeURIComponent(user),{method:'DELETE'});if(editingProxyUser===user)editingProxyUser=null;renderProxy();toast('已删除');}catch(err){toast(err.message,true);}return;}if(save){const user=$('#proxyUser').value.trim(),pass=$('#proxyPass').value.trim(),strategy=$('#proxyStrategy').value,slots=Array.from(document.querySelectorAll('.proxy-slot:checked')).map(function(x){return parseInt(x.value,10);});const conflict=Object.keys(proxyOwners(user)).some(function(s){return slots.indexOf(parseInt(s,10))>=0;});if(!user||!pass||!slots.length){$('#proxyConflict').textContent='用户名、密码和至少一个 Tunnel 都是必填项';return;}if(conflict){$('#proxyConflict').textContent='该 Tunnel 已被其他用户占用，不能重复分配';return;}save.disabled=true;try{proxyConfig=await api('/api/proxy/user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:user,pass:pass,tunnel_slots:slots,strategy:strategy,interval_seconds:strategy==='time'?parseInt($('#proxyInterval').value,10)||60:0})});editingProxyUser=null;renderProxy();toast('已保存');}catch(err){$('#proxyConflict').textContent=err.message;}save.disabled=false;}});document.addEventListener('change',function(e){if(e.target&&e.target.id==='proxyStrategy'){const w=$('#proxyIntervalWrap');if(w)w.hidden=e.target.value!=='time';}});
 // 自建模式下入站由 fanout 自己管，界面要提供新建入口；
 // 接管 3x-ui 时入站归面板管，这里只读不写。
 function isNative(){ return view.backend === 'native'; }
@@ -653,6 +692,7 @@ async function poll(){
     renderExits();
     renderOrphans();
   }catch(e){}
+  if(editingProxyUser===null) await loadProxyConfig();
   try{ renderJobs(await api('/api/jobs') || []); }catch(e){}
 }
 
@@ -1326,6 +1366,7 @@ $('#setSave').onclick = async e => {
 };
 
 poll();
+editingProxyUser=null;
 setInterval(poll, 3000);
 </script>
 </body>
