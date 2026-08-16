@@ -256,6 +256,35 @@ show_links() {
   echo -e "  ${D}用着有问题、或者想要什么功能，去群里说或提 issue。${N}"
 }
 
+# 打印从本地安全访问统一 SOCKS5 入口的 SSH 隧道命令。
+# 本地先跑这条命令，再把 SOCKS5 客户端指向 127.0.0.1:<本地端口>。
+tunnel_hint() {
+  local bp pw ip port sshport sport
+  port=$(web_port)
+  bp=$(cat "$WORK_DIR/basepath" 2>/dev/null || echo "-")
+  ip=$(public_ip)
+  # 服务器 SSH 端口：优先读 -p 参数，其次 22
+  sshport=$(grep -oE '^Port [0-9]+' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -1)
+  [[ -n $sshport ]] || sshport=22
+  # 统一 SOCKS5 入口端口：从网页配置读不到，让用户填
+  read -rp "  统一 SOCKS5 入口端口（管理界面里可见）: " sport
+  [[ -n $sport ]] || { echo "  已取消"; return; }
+
+  echo
+  echo -e "  ${B}在本地电脑执行（把 1080 换成任意空闲本地端口）：${N}"
+  echo
+  echo -e "    ssh -N -D 1080 root@${ip} -p ${sshport}"
+  echo
+  echo -e "  ${B}然后 SOCKS5 客户端填：${N}"
+  echo
+  echo -e "    服务器   127.0.0.1"
+  echo -e "    端口     1080"
+  echo -e "    用户/密码 统一入口里的用户名密码"
+  echo
+  echo -e "  ${D}安全说明：流量走 SSH 加密；统一入口建议只监听 127.0.0.1，"
+  echo -e "  别在 NAT 里映射 SOCKS5 端口，公网就扫不到。${N}"
+}
+
 # settings.json 里的 tls 开关。传 1 开 HTTPS、0 关，空参数只读。
 # 直接重写整个文件保证 JSON 整洁，同时保留现有 port/listen_addr。
 set_tls() {
@@ -450,13 +479,14 @@ menu() {
     echo "   3) 重启          4) 查看日志"
     echo
     echo "   5) 隧道列表      6) 连接信息"
+    echo "   7) 隧道访问（本地安全连 SOCKS5）"
     echo
-    echo "   7) 改端口        8) 改口令"
-    echo "   9) 改访问路径   10) 证书管理"
-    echo "  11) 开机自启开关"
+    echo "   8) 改端口        9) 改口令"
+    echo "  10) 改访问路径   11) 证书管理"
+    echo "  12) 开机自启开关"
     echo
-    echo "  12) 更新         13) 卸载"
-    echo "  14) 项目信息"
+    echo "  13) 更新         14) 卸载"
+    echo "  15) 项目信息"
     echo "   0) 退出"
     echo -e "${D}  ─────────────────────────────${N}"
     read -rp "  选择: " choice
@@ -468,11 +498,12 @@ menu() {
       4) echo; svc_logs 40; pause ;;
       5) list_tunnels; pause ;;
       6) show_info; pause ;;
-      7) change_port; pause ;;
-      8) reset_password; pause ;;
-      9) reset_basepath; pause ;;
-      10) manage_cert; pause ;;
-      11)
+      7) tunnel_hint; pause ;;
+      8) change_port; pause ;;
+      9) reset_password; pause ;;
+      10) reset_basepath; pause ;;
+      11) manage_cert; pause ;;
+      12)
         if svc_is_enabled; then
           svc_disable
           echo -e "\n  ${Y}已关闭开机自启${N}"
@@ -481,9 +512,9 @@ menu() {
           echo -e "\n  ${G}已开启开机自启${N}"
         fi
         pause ;;
-      12) do_update; pause ;;
-      14) show_links; pause ;;
-      13) do_uninstall; pause ;;
+      13) do_update; pause ;;
+      15) show_links; pause ;;
+      14) do_uninstall; pause ;;
       0) exit 0 ;;
       *) ;;
     esac
@@ -501,12 +532,13 @@ case "${1:-}" in
   log)      svc_logs_follow ;;
   info)     show_info ;;
   list)     list_tunnels ;;
+  tunnel)   tunnel_hint ;;
   update)   do_update ;;
   cert)     manage_cert ;;
   uninstall) do_uninstall ;;
   "")       menu ;;
   *)
-    echo "用法: f [start|stop|restart|status|log|info|list|update|cert|uninstall]"
+    echo "用法: f [start|stop|restart|status|log|info|list|tunnel|update|cert|uninstall]"
     echo "不带参数进入交互菜单"
     ;;
 esac
