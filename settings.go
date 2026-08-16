@@ -19,6 +19,9 @@ type WebSettings struct {
 	Port int `json:"port"`
 	// ListenAddr 是监听地址：空或 0.0.0.0 表示所有网卡；127.0.0.1 表示只本机。
 	ListenAddr string `json:"listen_addr"`
+	// TLS 为 true 时以 HTTPS 提供服务。证书由设置面板上传，固定存成
+	// workdir/web.crt 和 workdir/web.key（见 settingsCertPaths）。
+	TLS bool `json:"tls,omitempty"`
 }
 
 var (
@@ -28,6 +31,11 @@ var (
 )
 
 func webSettingsFilePath(dir string) string { return filepath.Join(dir, "settings.json") }
+
+// settingsCertPaths 是 HTTPS 证书文件的固定路径。由设置面板上传后落盘在这。
+func settingsCertPaths(dir string) (certFile, keyFile string) {
+	return filepath.Join(dir, "web.crt"), filepath.Join(dir, "web.key")
+}
 
 // loadWebSettings 读盘并返回当前配置。
 //

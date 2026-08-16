@@ -1,9 +1,11 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -155,9 +157,10 @@ func main() {
 		log.Fatalf("加载 Web 设置失败: %v", err)
 	}
 
-	srv := newWebServer(StripBasePath(auth.Wrap(mux)))
-	// 设置面板：改密码 / 改路径 / 改端口 / 改本地监听。
+	srv := newWebServer(*workDir, StripBasePath(auth.Wrap(mux)))
+	// 设置面板：改密码 / 改路径 / 改端口 / 改本地监听 / 上传 HTTPS 证书。
 	mux.HandleFunc("/api/settings", apiSettings(auth, srv))
+	mux.HandleFunc("/api/settings/cert", apiSettingsCert(srv))
 	mux.HandleFunc("/api/update/check", apiUpdateCheck)
 	mux.HandleFunc("/api/update/apply", apiUpdateApply)
 
@@ -297,6 +300,7 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 		BasePath   *string `json:"base_path"`   // 提供即改访问路径（空串=去掉前缀）
 		Port       *int    `json:"port"`        // 提供即改监听端口
 		ListenAddr *string `json:"listen_addr"` // 提供即改监听地址
+		TLS        *bool   `json:"tls"`         // 提供即开关 HTTPS（需要已上传证书）
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -320,14 +324,25 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 					return
 				}
 			}
-			// 改端口 / 监听地址：合成一份新的 WebSettings 一起应用，避免绑两次
-			if in.Port != nil || in.ListenAddr != nil {
+			// 改端口 / 监听地址 / TLS：合成一份新的 WebSettings 一起应用，避免绑两次
+			if in.Port != nil || in.ListenAddr != nil || in.TLS != nil {
 				next := getWebSettings()
 				if in.Port != nil {
 					next.Port = *in.Port
 				}
 				if in.ListenAddr != nil {
 					next.ListenAddr = *in.ListenAddr
+				}
+				if in.TLS != nil {
+					if *in.TLS {
+						// 开 HTTPS 前确认证书已上传
+						certFile, keyFile := settingsCertPaths(srv.dir)
+						if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
+							writeJSON(w, http.StatusBadRequest, map[string]string{"error": "未上传 HTTPS 证书，请先在设置面板上传"})
+							return
+						}
+					}
+					next.TLS = *in.TLS
 				}
 				if err := srv.applyWebSettings(next); err != nil {
 					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -345,10 +360,51 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"base_path":    currentBasePath(),
 			"port":         cfg.Port,
 			"listen_addr":  listen,
+			"tls":          cfg.TLS,
 			"has_password": true,
 			"version":      version,
 		})
 	}
+}
+
+// apiSettingsCert 接收设置面板上传的 HTTPS 证书（证书 + 私钥 PEM），
+// 校验配对后落盘并切换为 HTTPS。请求体是 multipart/form-data：cert、key 两个文件。
+func apiSettingsCert(srv *webServer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "用 POST"})
+			return
+		}
+		if err := r.ParseMultipartForm(2 << 20); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "无法解析上传: " + err.Error()})
+			return
+		}
+		certPEM, err := readUpload(r, "cert")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		keyPEM, err := readUpload(r, "key")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := srv.applyWebTLSCert(certPEM, keyPEM); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": "已上传并切换为 HTTPS"})
+	}
+}
+
+// readUpload 从 multipart 表单里读出指定字段的文件内容。
+func readUpload(r *http.Request, field string) ([]byte, error) {
+	f, _, err := r.FormFile(field)
+	if err != nil {
+		return nil, fmt.Errorf("缺少 %s 文件: %v", field, err)
+	}
+	defer f.Close()
+	return io.ReadAll(f)
 }
 
 // apiUpdateCheck 问 GitHub 最新 release，回报当前/最新版本与更新内容。

@@ -497,6 +497,15 @@ textarea:focus{outline:none;border-color:var(--accent)}
       </div>
       <div class="hint bad" id="setPortHint">改端口或监听地址会切换监听，保存后要用新地址重新打开界面。</div>
 
+      <div class="setrow" style="margin-top:16px">
+        <label class="f" style="margin:0"><span>HTTPS 证书（.crt/.pem）</span>
+          <input id="setCert" type="file" accept=".crt,.cer,.pem"></label>
+        <label class="f" style="margin:0"><span>私钥（.key/.pem）</span>
+          <input id="setKey" type="file" accept=".key,.pem"></label>
+      </div>
+      <div class="hint" id="setTLSHint">传 Cloudflare Origin 证书或任意受信任证书，上传后界面立即切到 HTTPS（用 https:// 重新打开）。</div>
+      <button id="setTLSOff" hidden style="margin-top:8px">关闭 HTTPS（切回 http://）</button>
+
       <div class="updsec">
         <div class="updrow">
           <div class="updver">版本 <b id="updCur">-</b><span id="updLatest"></span></div>
@@ -577,7 +586,7 @@ async function copy(text){
 let view = {exits:[], direct:[], panel:'', backend:'', public_ip:''};
 let inbounds = [];
 
-let proxyConfig={mode:'per-tunnel',port:0,listen_addr:'0.0.0.0',users:[]},editingProxyUser='';function proxyExit(slot){return view.exits.find(function(e){return e.slot===slot;});}function proxyOwners(skip){const o={};(proxyConfig.users||[]).forEach(function(u){if(u.user!==skip)(u.tunnel_slots||[]).forEach(function(s){o[s]=u.user;});});return o;}function proxySlotText(slot){const e=proxyExit(slot);return e?(e.region||'Tunnel')+' #'+slot+' · '+(e.exit_ip||e.status):'Tunnel #'+slot;}function proxyStrategyText(u){const m={'round-robin':'轮询','random':'随机','time':'按时段'};return m[u.strategy||'round-robin']||u.strategy;}function renderProxy(){const enabled=proxyConfig.mode==='unified';$('#unifiedEnabled').checked=enabled;$('#unifiedDetail').hidden=false;$('#unifiedPort').value=proxyConfig.port||'';$('#unifiedListen').value=proxyConfig.listen_addr||'0.0.0.0';const dot=$('#unifiedDot');dot.className='dot '+(enabled?'up':'');$('#unifiedStatus').textContent=enabled?('端口 '+(proxyConfig.port||'-')):'未启用（保留各 Tunnel 独立入口）';renderProxyUsers();}function renderProxyUsers(){const box=$('#proxyUsers'),users=proxyConfig.users||[];let out='<div class="ptop"><h3>用户与专属 Tunnel 绑定</h3><span class="count">'+users.length+' 个用户</span><span class="spacer"></span><button id="proxyAdd">新建用户</button></div>';if(!users.length)out+='<div class="hint">暂无统一入口用户。Tunnel 是独占的，只能归属一个用户，不能共享。</div>';else out+=users.map(function(u){const slots=(u.tunnel_slots||[]).map(proxySlotText).join('、');return '<div class="puser"><b>'+esc(u.user)+'</b><span class="pmeta">'+esc(proxyStrategyText(u))+' · '+esc(slots)+'</span><span><button class="icon" data-proxy-copy="'+esc(u.user)+'" title="复制 SOCKS5 访问凭据">'+ICON.copy+'</button><button class="icon" data-proxy-edit="'+esc(u.user)+'" title="编辑">编辑</button><button class="icon danger" data-proxy-del="'+esc(u.user)+'" title="删除">'+ICON.trash+'</button></span></div>';}).join('');if(editingProxyUser!==null){const old=users.find(function(u){return u.user===editingProxyUser;})||{user:'',pass:'',tunnel_slots:[],strategy:'round-robin',interval_seconds:60};const owner=proxyOwners(old.user),slots=old.tunnel_slots||[];const picks=view.exits.map(function(e){const used=owner[e.slot],checked=slots.indexOf(e.slot)>=0,off=!!used&&!checked;return '<label class="'+(off?'off':'')+'"><input type="checkbox" class="proxy-slot" value="'+e.slot+'"'+(checked?' checked':'')+(off?' disabled':'')+'><span>'+esc(proxySlotText(e.slot))+'</span>'+(used?'<small>归属 '+esc(used)+'</small>':'')+'</label>';}).join('');out+='<div class="bindform"><div class="bindtop"><b>'+ (old.user?'编辑用户 '+esc(old.user):'新建用户') +'</b><span class="spacer"></span><button class="icon" id="proxyCancel" title="取消">'+ICON.x+'</button></div><div class="bindfields"><label class="ef"><span>用户名</span><input id="proxyUser" type="text" value="'+esc(old.user)+'"'+(old.user?' readonly':'')+'></label><label class="ef"><span>密码</span><input id="proxyPass" type="password" value="'+esc(old.pass)+'"></label><label class="ef"><span>调度策略</span><select id="proxyStrategy"><option value="round-robin">每次请求轮询</option><option value="random">随机</option><option value="time">按时段</option></select></label></div><label class="ef" id="proxyIntervalWrap" style="margin-top:10px"'+((old.strategy||'round-robin')==='time'?'':' hidden')+'><span>切换间隔（秒）</span><input id="proxyInterval" type="text" inputmode="numeric" value="'+(old.interval_seconds||60)+'"></label><div class="tunnelpick">'+(picks||'<span class="hint">请先创建并启动 Tunnel。</span>')+'</div><div class="bindfoot"><span class="conflict" id="proxyConflict"></span><span class="spacer"></span><button id="proxyUserSave" class="primary">保存用户</button></div></div>';}box.innerHTML=out;if(editingProxyUser!==null){$('#proxyStrategy').value=old.strategy||'round-robin';}}async function loadProxyConfig(){try{proxyConfig=await api('/api/proxy');renderProxy();}catch(e){$('#unifiedStatus').textContent='读取统一入口配置失败：'+e.message;}}$('#unifiedEnabled').onchange=function(){ $('#unifiedStatus').textContent='切换后点击保存生效';};$('#unifiedSave').onclick=async function(e){const port=$('#unifiedPort').value.trim();const cfg=Object.assign({},proxyConfig,{mode:$('#unifiedEnabled').checked?'unified':'per-tunnel',listen_addr:$('#unifiedListen').value,port:port?parseInt(port,10):0});e.target.disabled=true;try{proxyConfig=await api('/api/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});renderProxy();toast(cfg.mode==='unified'?'已启用统一入口':'已关闭统一入口（保留各 Tunnel 独立入口）');}catch(err){toast(err.message,true);}e.target.disabled=false;};document.addEventListener('click',async function(e){const add=e.target.closest('#proxyAdd'),edit=e.target.closest('[data-proxy-edit]'),del=e.target.closest('[data-proxy-del]'),copyBtn=e.target.closest('[data-proxy-copy]'),cancel=e.target.closest('#proxyCancel'),save=e.target.closest('#proxyUserSave');if(copyBtn){const u=proxyConfig.users.find(function(x){return x.user===copyBtn.dataset.proxyCopy;});if(!u){toast('用户不存在',true);return;}if(proxyConfig.mode!=='unified'||!proxyConfig.port){toast('请先启用统一入口并设置端口',true);return;}copy(socksURL(view.public_ip||location.hostname,proxyConfig.port,u.user,u.pass));return;}if(add){editingProxyUser='';renderProxyUsers();return;}if(edit){editingProxyUser=edit.dataset.proxyEdit;renderProxyUsers();return;}if(cancel){editingProxyUser=null;renderProxyUsers();return;}if(del){const user=del.dataset.proxyDel;if(!confirm('确认删除用户 '+user+'？其绑定的 Tunnel 会释放'))return;try{proxyConfig=await api('/api/proxy/user?user='+encodeURIComponent(user),{method:'DELETE'});if(editingProxyUser===user)editingProxyUser=null;renderProxy();toast('已删除');}catch(err){toast(err.message,true);}return;}if(save){const user=$('#proxyUser').value.trim(),pass=$('#proxyPass').value.trim(),strategy=$('#proxyStrategy').value,slots=Array.from(document.querySelectorAll('.proxy-slot:checked')).map(function(x){return parseInt(x.value,10);});const conflict=Object.keys(proxyOwners(user)).some(function(s){return slots.indexOf(parseInt(s,10))>=0;});if(!user||!pass||!slots.length){$('#proxyConflict').textContent='用户名、密码和至少一个 Tunnel 都是必填项';return;}if(conflict){$('#proxyConflict').textContent='该 Tunnel 已被其他用户占用，不能重复分配';return;}save.disabled=true;try{proxyConfig=await api('/api/proxy/user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:user,pass:pass,tunnel_slots:slots,strategy:strategy,interval_seconds:strategy==='time'?parseInt($('#proxyInterval').value,10)||60:0})});editingProxyUser=null;renderProxy();toast('已保存');}catch(err){$('#proxyConflict').textContent=err.message;}save.disabled=false;}});document.addEventListener('change',function(e){if(e.target&&e.target.id==='proxyStrategy'){const w=$('#proxyIntervalWrap');if(w)w.hidden=e.target.value!=='time';}});
+let proxyConfig={mode:'per-tunnel',port:0,listen_addr:'0.0.0.0',users:[]},editingProxyUser='';function proxyExit(slot){return view.exits.find(function(e){return e.slot===slot;});}function proxyOwners(skip){const o={};(proxyConfig.users||[]).forEach(function(u){if(u.user!==skip)(u.tunnel_slots||[]).forEach(function(s){o[s]=u.user;});});return o;}function proxySlotText(slot){const e=proxyExit(slot);return e?(e.region||'Tunnel')+' #'+slot+' · '+(e.exit_ip||e.status):'Tunnel #'+slot;}function proxyStrategyText(u){const m={'round-robin':'轮询','random':'随机','time':'按时段'};return m[u.strategy||'round-robin']||u.strategy;}function renderProxy(){const enabled=proxyConfig.mode==='unified';$('#unifiedEnabled').checked=enabled;$('#unifiedDetail').hidden=false;$('#unifiedPort').value=proxyConfig.port||'';$('#unifiedListen').value=proxyConfig.listen_addr||'0.0.0.0';const dot=$('#unifiedDot');dot.className='dot '+(enabled?'up':'');$('#unifiedStatus').textContent=enabled?('端口 '+(proxyConfig.port||'-')):'未启用（保留各 Tunnel 独立入口）';renderProxyUsers();}function renderProxyUsers(){const box=$('#proxyUsers'),users=proxyConfig.users||[];let out='<div class="ptop"><h3>用户与专属 Tunnel 绑定</h3><span class="count">'+users.length+' 个用户</span><span class="spacer"></span><button id="proxyAdd">新建用户</button></div>';if(!users.length)out+='<div class="hint">暂无统一入口用户。Tunnel 是独占的，只能归属一个用户，不能共享。</div>';else out+=users.map(function(u){const slots=(u.tunnel_slots||[]).map(proxySlotText).join('、');return '<div class="puser"><b>'+esc(u.user)+'</b><span class="pmeta">'+esc(proxyStrategyText(u))+' · '+esc(slots)+'</span><span><button class="icon" data-proxy-copy="'+esc(u.user)+'" title="复制 SOCKS5 访问凭据">'+ICON.copy+'</button><button class="icon" data-proxy-edit="'+esc(u.user)+'" title="编辑">编辑</button><button class="icon danger" data-proxy-del="'+esc(u.user)+'" title="删除">'+ICON.trash+'</button></span></div>';}).join('');if(editingProxyUser!==null){const old=users.find(function(u){return u.user===editingProxyUser;})||{user:'',pass:'',tunnel_slots:[],strategy:'round-robin',interval_seconds:60};const owner=proxyOwners(old.user),slots=old.tunnel_slots||[];const picks=view.exits.map(function(e){const used=owner[e.slot],checked=slots.indexOf(e.slot)>=0,off=!!used&&!checked;return '<label class="'+(off?'off':'')+'"><input type="checkbox" class="proxy-slot" value="'+e.slot+'"'+(checked?' checked':'')+(off?' disabled':'')+'><span>'+esc(proxySlotText(e.slot))+'</span>'+(used?'<small>归属 '+esc(used)+'</small>':'')+'</label>';}).join('');out+='<div class="bindform"><div class="bindtop"><b>'+ (old.user?'编辑用户 '+esc(old.user):'新建用户') +'</b><span class="spacer"></span><button class="icon" id="proxyCancel" title="取消">'+ICON.x+'</button></div><div class="bindfields"><label class="ef"><span>用户名</span><input id="proxyUser" type="text" value="'+esc(old.user)+'"'+(old.user?' readonly':'')+'></label><label class="ef"><span>密码</span><input id="proxyPass" type="password" value="'+esc(old.pass)+'"></label><label class="ef"><span>调度策略</span><select id="proxyStrategy"><option value="round-robin">每次请求轮询</option><option value="random">随机</option><option value="time">按时段</option></select></label></div><label class="ef" id="proxyIntervalWrap" style="margin-top:10px"'+((old.strategy||'round-robin')==='time'?'':' hidden')+'><span>切换间隔（秒）</span><input id="proxyInterval" type="text" inputmode="numeric" value="'+(old.interval_seconds||60)+'"></label><div class="tunnelpick">'+(picks||'<span class="hint">请先创建并启动 Tunnel。</span>')+'</div><div class="bindfoot"><span class="conflict" id="proxyConflict"></span><span class="spacer"></span><button id="proxyUserSave" class="primary">保存用户</button></div></div>';}box.innerHTML=out;if(editingProxyUser!==null){$('#proxyStrategy').value=old.strategy||'round-robin';}}async function loadProxyConfig(){try{proxyConfig=await api('/api/proxy');renderProxy();}catch(e){$('#unifiedStatus').textContent='读取统一入口配置失败：'+e.message;}}async function saveUnified(btn){const port=$('#unifiedPort').value.trim();const cfg=Object.assign({},proxyConfig,{mode:$('#unifiedEnabled').checked?'unified':'per-tunnel',listen_addr:$('#unifiedListen').value,port:port?parseInt(port,10):0});if(btn)btn.disabled=true;try{proxyConfig=await api('/api/proxy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});renderProxy();toast(cfg.mode==='unified'?'已启用统一入口':'已关闭统一入口（保留各 Tunnel 独立入口）');}catch(err){toast(err.message,true);}if(btn)btn.disabled=false;}$('#unifiedEnabled').onchange=function(){ saveUnified(null); };$('#unifiedSave').onclick=function(e){ saveUnified(this); };document.addEventListener('click',async function(e){const add=e.target.closest('#proxyAdd'),edit=e.target.closest('[data-proxy-edit]'),del=e.target.closest('[data-proxy-del]'),copyBtn=e.target.closest('[data-proxy-copy]'),cancel=e.target.closest('#proxyCancel'),save=e.target.closest('#proxyUserSave');if(copyBtn){const u=proxyConfig.users.find(function(x){return x.user===copyBtn.dataset.proxyCopy;});if(!u){toast('用户不存在',true);return;}if(proxyConfig.mode!=='unified'||!proxyConfig.port){toast('请先启用统一入口并设置端口',true);return;}copy(socksURL(view.public_ip||location.hostname,proxyConfig.port,u.user,u.pass));return;}if(add){editingProxyUser='';renderProxyUsers();return;}if(edit){editingProxyUser=edit.dataset.proxyEdit;renderProxyUsers();return;}if(cancel){editingProxyUser=null;renderProxyUsers();return;}if(del){const user=del.dataset.proxyDel;if(!confirm('确认删除用户 '+user+'？其绑定的 Tunnel 会释放'))return;try{proxyConfig=await api('/api/proxy/user?user='+encodeURIComponent(user),{method:'DELETE'});if(editingProxyUser===user)editingProxyUser=null;renderProxy();toast('已删除');}catch(err){toast(err.message,true);}return;}if(save){const user=$('#proxyUser').value.trim(),pass=$('#proxyPass').value.trim(),strategy=$('#proxyStrategy').value,slots=Array.from(document.querySelectorAll('.proxy-slot:checked')).map(function(x){return parseInt(x.value,10);});const conflict=Object.keys(proxyOwners(user)).some(function(s){return slots.indexOf(parseInt(s,10))>=0;});if(!user||!pass||!slots.length){$('#proxyConflict').textContent='用户名、密码和至少一个 Tunnel 都是必填项';return;}if(conflict){$('#proxyConflict').textContent='该 Tunnel 已被其他用户占用，不能重复分配';return;}save.disabled=true;try{proxyConfig=await api('/api/proxy/user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:user,pass:pass,tunnel_slots:slots,strategy:strategy,interval_seconds:strategy==='time'?parseInt($('#proxyInterval').value,10)||60:0})});editingProxyUser=null;renderProxy();toast('已保存');}catch(err){$('#proxyConflict').textContent=err.message;}save.disabled=false;}});document.addEventListener('change',function(e){if(e.target&&e.target.id==='proxyStrategy'){const w=$('#proxyIntervalWrap');if(w)w.hidden=e.target.value!=='time';}});
 // 自建模式下入站由 fanout 自己管，界面要提供新建入口；
 // 接管 3x-ui 时入站归面板管，这里只读不写。
 function isNative(){ return view.backend === 'native'; }
@@ -1250,6 +1259,7 @@ $('#settingsBtn').onclick = async () => {
     $('#setPort').value = s.port || '';
     $('#setListen').value = s.listen_addr || '0.0.0.0';
     $('#setPathHint').textContent = '界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。';
+    renderTLSState(s);
     $('#updCur').textContent = s.version || '-';
     $('#updLatest').textContent = '';
     $('#updNotes').hidden = true;
@@ -1313,8 +1323,53 @@ function nextURL(port, listen, path){
   return location.protocol + '//' + host + ':' + port + (path ? '/' + path : '') + '/';
 }
 
+// 根据后端返回的 tls 状态更新证书区块的提示与操作按钮
+function renderTLSState(s){
+  const on = !!(s && s.tls);
+  $('#setTLSOff').hidden = !on;
+  $('#setTLSHint').textContent = on
+    ? 'HTTPS 已启用。换证书可重新上传；关闭请点下方按钮，会用 http:// 重新打开。'
+    : '传 Cloudflare Origin 证书或任意受信任证书，上传后界面立即切到 HTTPS。';
+}
+
+$('#setTLSOff').onclick = async e => {
+  if(!confirm('关闭 HTTPS 后界面用 http:// 访问，流量不再加密。确定？')) return;
+  e.target.disabled = true;
+  try{
+    await api('/api/settings', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({tls: false}),
+    });
+    toast('已关闭 HTTPS');
+    closeModal('settings');
+    setTimeout(() => { location.protocol = 'http:'; location.reload(); }, 800);
+  }catch(err){ toast(err.message, true); }
+  e.target.disabled = false;
+};
+
+// 上传证书：两个文件选好后点保存一并提交
 $('#setSave').onclick = async e => {
   e.target.disabled = true;
+  const certFile = $('#setCert').files[0];
+  const keyFile  = $('#setKey').files[0];
+  if(certFile || keyFile){
+    if(!certFile || !keyFile){
+      toast('证书和私钥要一起传', true);
+      e.target.disabled = false;
+      return;
+    }
+    const fd = new FormData();
+    fd.append('cert', certFile);
+    fd.append('key', keyFile);
+    try{
+      const r = await api('/api/settings/cert', {method:'POST', body: fd});
+      toast(r.ok || '已上传并切换为 HTTPS');
+      closeModal('settings');
+      setTimeout(() => { location.protocol = 'https:'; location.reload(); }, 800);
+      return;
+    }catch(err){ toast(err.message, true); e.target.disabled = false; return; }
+  }
   const body = {};
   const pw = $('#setPw').value.trim();
   if(pw) body.password = pw;

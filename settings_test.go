@@ -1,6 +1,13 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -90,15 +97,14 @@ func TestAuthSetPassword(t *testing.T) {
 	}
 }
 
-func TestWebServerReloadSwitchesPort(t *testing.T) {
-	dir := t.TempDir()
+func TestWebServerReloadSwitchesPort(t *testing.T) {	dir := t.TempDir()
 	if _, err := loadWebSettings(dir, 0, false); err != nil {
 		t.Fatalf("loadWebSettings: %v", err)
 	}
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
-	srv := newWebServer(h)
+	srv := newWebServer(dir, h)
 
 	// 用两个系统分配的空闲端口验证切换
 	p1 := freePort(t)
@@ -187,4 +193,110 @@ func TestLoadWebSettingsExplicitFlagWins(t *testing.T) {
 	if s.Port != 80 {
 		t.Fatalf("显式指定的端口应已写回，实际 %d", s.Port)
 	}
+}
+
+// TestWebServerTLS 验证证书上传后能切到 HTTPS，再关回 HTTP。
+func TestWebServerTLS(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadWebSettings(dir, 8899, false); err != nil {
+		t.Fatalf("loadWebSettings: %v", err)
+	}
+	certPEM, keyPEM := genSelfSignedPEM(t, "panel.example.com")
+
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("ok"))
+	})
+	srv := newWebServer(dir, h)
+
+	p := freePort(t)
+	// 以全局配置为准监听（端口临时覆盖为 p，TLS 关闭）
+	if err := srv.applyWebSettings(WebSettings{Port: p, ListenAddr: "127.0.0.1"}); err != nil {
+		t.Fatalf("初始 HTTP: %v", err)
+	}
+	waitServe(t, p)
+	if getWebSettings().Port != p || getWebSettings().TLS {
+		t.Fatalf("初始配置不符: %+v", getWebSettings())
+	}
+
+	// 证书+私钥不配对应被拒
+	if err := srv.applyWebTLSCert([]byte("bad"), keyPEM); err == nil {
+		t.Fatal("不配对的证书应被拒")
+	}
+	// HTTP 仍在服务
+	waitServe(t, p)
+
+	// 上传正确证书后应切到 HTTPS
+	if err := srv.applyWebTLSCert(certPEM, keyPEM); err != nil {
+		t.Fatalf("applyWebTLSCert: %v", err)
+	}
+	if !getWebSettings().TLS {
+		t.Fatal("上传证书后 TLS 应为 true")
+	}
+	waitTLS(t, p, "panel.example.com")
+
+	// 明文 HTTP 请求此时应被拒（TLS 握手接管，服务端回 400 而非 200）
+	time.Sleep(300 * time.Millisecond)
+	resp, err := http.Get("http://127.0.0.1:" + strconv.Itoa(p) + "/")
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			t.Fatal("HTTPS 开启后明文 HTTP 请求不应返回 200")
+		}
+	}
+
+	// 关闭 TLS 应切回 HTTP
+	if err := srv.applyWebSettings(WebSettings{Port: p, ListenAddr: "127.0.0.1", TLS: false}); err != nil {
+		t.Fatalf("关闭 TLS: %v", err)
+	}
+	waitServe(t, p)
+	if getWebSettings().TLS {
+		t.Fatal("关闭后 TLS 应为 false")
+	}
+}
+
+func waitTLS(t *testing.T, port int, serverName string) {
+	t.Helper()
+	url := "https://127.0.0.1:" + strconv.Itoa(port) + "/"
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         serverName,
+		},
+	}
+	client := &http.Client{Transport: tr}
+	for i := 0; i < 40; i++ {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("HTTPS 端口 %d 未在预期时间内提供服务", port)
+}
+
+// genSelfSignedPEM 用 Go 原生生成一张自签证书，避免测试依赖 openssl。
+func genSelfSignedPEM(t *testing.T, host string) (certPEM, keyPEM []byte) {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("生成 RSA 密钥失败: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: host},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{host},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("生成证书失败: %v", err)
+	}
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+	return certPEM, keyPEM
 }
