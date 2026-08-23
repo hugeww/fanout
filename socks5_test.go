@@ -120,3 +120,42 @@ func TestSocksURL(t *testing.T) {
 		t.Fatalf("无凭据 URL 不对: %s", got)
 	}
 }
+
+// loopbackOnly 判断要求：仅 127.0.0.1 / ::1 算本机回环。
+func TestLoopbackOnly(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"0.0.0.0", false},
+		{"", false},
+		{"192.168.1.5", false},
+		{"10.0.0.2", false},
+	}
+	for _, c := range cases {
+		if got := loopbackOnly(c.addr); got != c.want {
+			t.Errorf("loopbackOnly(%q)=%v, want %v", c.addr, got, c.want)
+		}
+	}
+}
+
+// 空凭据（仅本机监听时的路径）应走免认证：
+// 客户端只报无认证也应被接受，而不是被拒绝。
+func TestSocksNoAuthWhenCredEmpty(t *testing.T) {
+	c, done := runServeSocks(&SocksCred{})
+	defer done()
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+
+	if _, err := c.Write([]byte{socksVer5, 0x01, authNone}); err != nil {
+		t.Fatalf("写方法协商失败: %v", err)
+	}
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(c, resp); err != nil {
+		t.Fatalf("读方法选择失败: %v", err)
+	}
+	if resp[0] != socksVer5 || resp[1] != authNone {
+		t.Fatalf("应接受无认证方法，得到 %#v", resp)
+	}
+}

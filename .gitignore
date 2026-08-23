@@ -4,3 +4,5 @@ fanout
 .gomodcache
 .gocache
 .idea
+fanout_linux_amd64
+.xcodemap/

@@ -22,6 +22,9 @@ type WebSettings struct {
 	// TLS 为 true 时以 HTTPS 提供服务。证书由设置面板上传，固定存成
 	// workdir/web.crt 和 workdir/web.key（见 settingsCertPaths）。
 	TLS bool `json:"tls,omitempty"`
+	// TunnelListenAddr 是隧道 SOCKS5 端口的监听地址：空或 0.0.0.0 表示所有网卡；
+	// 127.0.0.1 表示仅本机（配合 SSH 本地转发更安全）。改后重启隧道生效。
+	TunnelListenAddr string `json:"tunnel_listen_addr"`
 }
 
 var (

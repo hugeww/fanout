@@ -256,33 +256,52 @@ show_links() {
   echo -e "  ${D}用着有问题、或者想要什么功能，去群里说或提 issue。${N}"
 }
 
-# 打印从本地安全访问统一 SOCKS5 入口的 SSH 隧道命令。
-# 本地先跑这条命令，再把 SOCKS5 客户端指向 127.0.0.1:<本地端口>。
+# 打印从本地安全访问 fanout SOCKS5 的 SSH 本地转发命令。
+# 必须用 -L 把远端 SOCKS5 端口引到本地；
+# -D 是让 SSH 自己当 SOCKS5，会绕过 fanout 的隧道，出口会变成服务器 IP。
 tunnel_hint() {
-  local bp pw ip port sshport sport
-  port=$(web_port)
-  bp=$(cat "$WORK_DIR/basepath" 2>/dev/null || echo "-")
+  local ip sshport tport sport
   ip=$(public_ip)
   # 服务器 SSH 端口：优先读 -p 参数，其次 22
   sshport=$(grep -oE '^Port [0-9]+' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -1)
   [[ -n $sshport ]] || sshport=22
-  # 统一 SOCKS5 入口端口：从网页配置读不到，让用户填
-  read -rp "  统一 SOCKS5 入口端口（管理界面里可见）: " sport
-  [[ -n $sport ]] || { echo "  已取消"; return; }
 
   echo
   echo -e "  ${B}在本地电脑执行（把 1080 换成任意空闲本地端口）：${N}"
+
   echo
-  echo -e "    ssh -N -D 1080 root@${ip} -p ${sshport}"
+  echo -e "  ${D}方式 A · 独立隧道入口（浏览器 / Playwright / Camoufox 用，免认证）${N}"
+  echo -e "  ${D}隧道端口在 f list 里可见（如 29148/37281/55424）。${N}"
+  read -rp "  独立隧道 SOCKS5 端口（留空跳过）: " tport
+  if [[ -n $tport ]]; then
+    echo
+    echo -e "    ssh -N -L 1080:127.0.0.1:${tport} root@${ip} -p ${sshport}"
+    echo
+    echo -e "  客户端填（监听地址设为仅本机时无需用户名密码）："
+    echo -e "    socks5://127.0.0.1:1080"
+  else
+    echo -e "  ${D}（已跳过）${N}"
+  fi
+
   echo
-  echo -e "  ${B}然后 SOCKS5 客户端填：${N}"
+  echo -e "  ${D}方式 B · 统一入口（curl / requests 等支持 SOCKS5 认证的客户端）${N}"
+  echo -e "  ${D}统一入口端口在管理界面里可见。${N}"
+  read -rp "  统一入口端口（留空跳过）: " sport
+  if [[ -n $sport ]]; then
+    echo
+    echo -e "    ssh -N -L 1080:127.0.0.1:${sport} root@${ip} -p ${sshport}"
+    echo
+    echo -e "  客户端填："
+    echo -e "    socks5://127.0.0.1:1080"
+    echo -e "    用户名/密码 统一入口里的用户名密码"
+  else
+    echo -e "  ${D}（已跳过）${N}"
+  fi
+
   echo
-  echo -e "    服务器   127.0.0.1"
-  echo -e "    端口     1080"
-  echo -e "    用户/密码 统一入口里的用户名密码"
-  echo
-  echo -e "  ${D}安全说明：流量走 SSH 加密；统一入口建议只监听 127.0.0.1，"
-  echo -e "  别在 NAT 里映射 SOCKS5 端口，公网就扫不到。${N}"
+  echo -e "  ${D}安全说明：流量走 SSH 加密；免认证只在该端口监听 127.0.0.1 时成立"
+  echo -e "  （设置 → 各隧道 SOCKS5 监听地址选“仅本机”）。别在 NAT 里映射"
+  echo -e "  SOCKS5 端口，公网就扫不到。${N}"
 }
 
 # settings.json 里的 tls 开关。传 1 开 HTTPS、0 关，空参数只读。

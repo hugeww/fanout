@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -181,6 +182,26 @@ func (t *Tunnel) startOpenVPN(dir string) error {
 	return fmt.Errorf("等待 tun0 就绪超时，详见 %s", logPath)
 }
 
+// tunnelListenAddr 读设置里的隧道监听地址；空表示所有网卡。
+func tunnelListenAddr() string {
+	s := getWebSettings()
+	addr, err := normalizeListenAddr(s.TunnelListenAddr)
+	if err != nil {
+		return ""
+	}
+	return addr
+}
+
+// bindAddr 返回这条隧道 SOCKS5 监听用的地址串。
+// 监听地址可在设置里配（tunnel_listen_addr），默认所有网卡。
+func (t *Tunnel) bindAddr() string {
+	addr := tunnelListenAddr()
+	if addr == "" {
+		addr = "0.0.0.0"
+	}
+	return net.JoinHostPort(addr, strconv.Itoa(t.Port))
+}
+
 // serve 在母机上监听 SOCKS5 端口，出站连接则在 netns 内建立。
 // 监听必须留在母机侧：netns 内的 loopback 与母机彼此独立，
 // 监听在 netns 里的话外部根本连不上。
@@ -190,7 +211,7 @@ func (t *Tunnel) serve() error {
 	var ln net.Listener
 	var err error
 	for i := 0; i < 6; i++ {
-		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", t.Port))
+		ln, err = net.Listen("tcp", t.bindAddr())
 		if err == nil {
 			break
 		}
@@ -202,7 +223,8 @@ func (t *Tunnel) serve() error {
 		if perr != nil {
 			return fmt.Errorf("监听 %d 失败且无备用端口: %w", t.Port, err)
 		}
-		ln, err = net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+		t.Port = port
+		ln, err = net.Listen("tcp", t.bindAddr())
 		if err != nil {
 			return fmt.Errorf("监听 %d 失败: %w", port, err)
 		}
@@ -217,12 +239,31 @@ func (t *Tunnel) serve() error {
 			if err != nil {
 				return
 			}
-			// 每次连接现取凭据：改口令后不必重建监听，新连接立刻按新凭据校验
-			cred := t.credential()
+			// 每次连接现取凭据：改口令后不必重建监听，新连接立刻按新凭据校验。
+			// 仅监听 127.0.0.1/::1 时信任本机（配合 SSH 本地转发），允许免认证连接，
+			// 客户端填 socks5://127.0.0.1:<本地端口> 即可（Playwright/Camoufox 不支持
+			// SOCKS5 用户名口令，这是它能接上的前提）；对外网则必须认证，防止端口被扫到即用。
+			cred := t.serveCred()
 			go serveSocks(conn, &cred, dial)
 		}
 	}()
 	return nil
+}
+
+// loopbackOnly 判断 SOCKS5 监听地址是否只对本机开放。
+// 127.0.0.1 与 ::1 是本机回环；0.0.0.0、空串及具体外网 IP 都不算。
+func loopbackOnly(addr string) bool {
+	ip := net.ParseIP(addr)
+	return ip != nil && ip.IsLoopback()
+}
+
+// serveCred 决定这条隧道每次连接要用的凭据：仅本机监听时返回空凭据（免认证），
+// 否则返回该隧道自己的用户名口令。见 serve() 里的说明。
+func (t *Tunnel) serveCred() SocksCred {
+	if loopbackOnly(tunnelListenAddr()) {
+		return SocksCred{}
+	}
+	return t.credential()
 }
 
 // credential 取一份凭据副本，避免读写并发。

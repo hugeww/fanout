@@ -296,11 +296,12 @@ func apiCred(m *Manager) http.HandlerFunc {
 // GET 返回当前值（不含明文口令）；POST 按传入的字段逐项应用，任一项失败即整体回报。
 func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 	type settingsReq struct {
-		Password   *string `json:"password"`    // 非空则改口令
-		BasePath   *string `json:"base_path"`   // 提供即改访问路径（空串=去掉前缀）
-		Port       *int    `json:"port"`        // 提供即改监听端口
-		ListenAddr *string `json:"listen_addr"` // 提供即改监听地址
-		TLS        *bool   `json:"tls"`         // 提供即开关 HTTPS（需要已上传证书）
+		Password         *string `json:"password"`           // 非空则改口令
+		BasePath         *string `json:"base_path"`          // 提供即改访问路径（空串=去掉前缀）
+		Port             *int    `json:"port"`               // 提供即改监听端口
+		ListenAddr       *string `json:"listen_addr"`        // 提供即改监听地址
+		TLS              *bool   `json:"tls"`                // 提供即开关 HTTPS（需要已上传证书）
+		TunnelListenAddr *string `json:"tunnel_listen_addr"` // 提供即改隧道监听地址
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
@@ -349,6 +350,23 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 					return
 				}
 			}
+			// 改隧道监听地址：只落盘，不重绑管理界面监听
+			if in.TunnelListenAddr != nil {
+				norm, err := normalizeListenAddr(*in.TunnelListenAddr)
+				if err != nil {
+					writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+					return
+				}
+				next := getWebSettings()
+				next.TunnelListenAddr = norm
+				webSettingsMu.Lock()
+				webSettingsCur = next
+				webSettingsMu.Unlock()
+				if err := saveWebSettings(); err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "保存设置失败: " + err.Error()})
+					return
+				}
+			}
 		}
 
 		cfg := getWebSettings()
@@ -357,9 +375,15 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			listen = "0.0.0.0"
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"base_path":    currentBasePath(),
-			"port":         cfg.Port,
-			"listen_addr":  listen,
+			"base_path":   currentBasePath(),
+			"port":        cfg.Port,
+			"listen_addr": listen,
+			"tunnel_listen_addr": func() string {
+				if cfg.TunnelListenAddr == "" {
+					return "0.0.0.0"
+				}
+				return cfg.TunnelListenAddr
+			}(),
 			"tls":          cfg.TLS,
 			"has_password": true,
 			"version":      version,

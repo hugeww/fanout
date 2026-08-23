@@ -26,6 +26,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/hugeww/fanout/main/install.s
 安装后运行 f 打开管理菜单。管理页面会显示统一 SOCKS5 入口、用户凭据、
 Tunnel 状态和出口 IP。
 
+## 本地安全连 SOCKS5
+
+将设置里的“各隧道 SOCKS5 监听地址”改为“仅本机 127.0.0.1”后，在本地电脑执行 SSH 本地转发：
+
+    ssh -N -L 1080:127.0.0.1:<隧道端口> root@服务器IP
+
+客户端填 `socks5://127.0.0.1:1080` 即可，**无需 SOCKS5 用户名口令**。这是因为仅本机监听时信任 SSH 连接作为认证边界，并且 Playwright/Camoufox 不支持 SOCKS5 用户名口令，免认证方可直接使用。仍监听 0.0.0.0 或具体外网 IP 时，各隧道依然要求用户名口令。
+
 ## 运维
 
 f info       # 连接信息

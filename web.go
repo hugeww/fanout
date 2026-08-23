@@ -239,7 +239,7 @@ textarea:focus{outline:none;border-color:var(--accent)}
     </div>
     <div class="udetail" id="unifiedDetail" hidden>
       <div class="uform">
-        <label class="ef"><span>监听端口</span><input id="unifiedPort" type="text" readonly></label>
+        <label class="ef"><span>统一入口端口</span><input id="unifiedPort" type="text" readonly></label>
         <div class="uhint">所有用户共用一个端口，按用户名密码路由到各自专属的 Tunnel；同一 Tunnel 只能属于一个用户，请求失败不会回退到本机网络。</div>
       </div>
       <div class="proxyusers" id="proxyUsers"></div>
@@ -263,13 +263,13 @@ textarea:focus{outline:none;border-color:var(--accent)}
         </select></label>
       <div class="hint">停用时保留各 Tunnel 独立入口。</div>
 
-      <label class="f" style="margin-top:16px"><span>监听地址</span>
+      <label class="f" style="margin-top:16px"><span>统一入口监听地址</span>
         <select id="unifiedCfgListen">
           <option value="0.0.0.0">全部网卡 0.0.0.0</option>
           <option value="127.0.0.1">仅本机 127.0.0.1</option>
         </select></label>
 
-      <label class="f" style="margin-top:16px"><span>监听端口</span>
+      <label class="f" style="margin-top:16px"><span>统一入口监听端口</span>
         <input id="unifiedCfgPort" type="text" inputmode="numeric" placeholder="留空自动分配"></label>
       <div class="hint bad" id="unifiedCfgHint"></div>
 
@@ -522,15 +522,22 @@ textarea:focus{outline:none;border-color:var(--accent)}
       <div class="hint" id="setBackendHint">节点从哪来。装了 3x-ui 或 xray-cf-lite 就能直接接管，都没有就用自建。</div>
 
       <div class="setrow">
-        <label class="f" style="margin:0"><span>监听端口</span>
+        <label class="f" style="margin:0"><span>面板服务端口</span>
           <input id="setPort" type="text" inputmode="numeric" spellcheck="false"></label>
-        <label class="f" style="margin:0"><span>本地监听地址</span>
+        <label class="f" style="margin:0"><span>面板服务监听地址</span>
           <select id="setListen">
             <option value="0.0.0.0">所有网卡（0.0.0.0）</option>
             <option value="127.0.0.1">仅本机（127.0.0.1）</option>
           </select></label>
       </div>
-      <div class="hint bad" id="setPortHint">改端口或监听地址会切换监听，保存后要用新地址重新打开界面。</div>
+      <div class="hint bad" id="setPortHint">上面是面板服务（网页管理界面）的端口和监听地址；改它会切换监听，保存后要用新地址重新打开界面。</div>
+
+      <label class="f" style="margin-top:16px"><span>各隧道 SOCKS5 监听地址（独立入口）</span>
+        <select id="setTunnelListen">
+          <option value="0.0.0.0">所有网卡（0.0.0.0）</option>
+          <option value="127.0.0.1">仅本机（127.0.0.1）</option>
+        </select></label>
+      <div class="hint">作用在每条隧道各自的 SOCKS5 端口（如 29148/37281/55424），也就是“独立入口”。默认对外网开放；改成仅本机后只能通过 SSH 本地转发访问（ssh -L 1080:127.0.0.1:<端口>），并且不再要求 SOCKS5 认证：客户端直接填 socks5://127.0.0.1:1080 即可，无需用户名密码（Playwright/Camoufox 不支持 SOCKS5 用户名口令，这一步才能接上）；仍监听外网时则必须认证。改完需重启隧道生效。</div>
 
       <div class="setrow" style="margin-top:16px">
         <label class="f" style="margin:0"><span>HTTPS 证书（.crt/.pem）</span>
@@ -1294,6 +1301,7 @@ $('#settingsBtn').onclick = async () => {
     $('#setPath').value = (s.base_path || '').replace(/^\//, '');
     $('#setPort').value = s.port || '';
     $('#setListen').value = s.listen_addr || '0.0.0.0';
+    $('#setTunnelListen').value = s.tunnel_listen_addr || '0.0.0.0';
     $('#setPathHint').textContent = '界面挂在这个路径下，扫端口的探不到。只能用字母数字和 - _。';
     renderTLSState(s);
     $('#updCur').textContent = s.version || '-';
@@ -1413,6 +1421,7 @@ $('#setSave').onclick = async e => {
   const port = parseInt($('#setPort').value.trim(), 10);
   if(port) body.port = port;
   body.listen_addr = $('#setListen').value;
+  body.tunnel_listen_addr = $('#setTunnelListen').value;
 
   const portChanged = curSettings && (port !== curSettings.port
     || body.listen_addr !== (curSettings.listen_addr || '0.0.0.0'));
