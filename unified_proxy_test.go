@@ -277,3 +277,103 @@ func TestUnifiedProxyConcurrentUsersRemainIsolated(t *testing.T) {
 		t.Fatalf("concurrent leases leaked: users=%v tunnels=%v", p.userConns, p.tunnelConns)
 	}
 }
+func TestUnifiedProxyLoopbackHandshakeAcceptsAuthNone(t *testing.T) {
+	p, _ := newUnifiedProxyForTest(nil, 10, 10)
+	p.replaceConfig(ProxyConfig{Mode: EntryModeUnified, Port: 19090, ListenAddr: "127.0.0.1"})
+
+	server, client := net.Pipe()
+	defer client.Close()
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.handshake(server)
+		_ = server.Close()
+		done <- err
+	}()
+
+	if _, err := client.Write([]byte{socksVer5, 1, authNone}); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 2)
+	if _, err := io.ReadFull(client, response); err != nil {
+		t.Fatal(err)
+	}
+	if response[1] != authNone {
+		t.Fatalf("loopback entry must accept authNone, got %#x", response[1])
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("loopback handshake failed: %v", err)
+	}
+}
+
+func TestUnifiedProxyLoopbackPoolsAllTunnels(t *testing.T) {
+	p, tunnels := newUnifiedProxyForTest(nil, 10, 10)
+	p.replaceConfig(ProxyConfig{Mode: EntryModeUnified, Port: 19090, ListenAddr: "127.0.0.1"})
+
+	var mu sync.Mutex
+	var calls []int
+	p.dialTunnel = func(tunnel *Tunnel, _ string) (net.Conn, error) {
+		mu.Lock()
+		calls = append(calls, tunnel.Slot)
+		mu.Unlock()
+		return newUnifiedProxyTestConn(), nil
+	}
+
+	// 免认证汇聚模式：空凭据也应在全部在线隧道间轮询。
+	for _, want := range []int{1, 2, 3} {
+		conn, err := p.dial(SocksCred{}, "example.com:443")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.Close()
+		mu.Lock()
+		got := calls[len(calls)-1]
+		mu.Unlock()
+		if got != want {
+			t.Fatalf("loopback pool dial %d: got tunnel %d, want %d", len(calls), got, want)
+		}
+	}
+
+	// 停掉的隧道不参与汇聚池。
+	tunnels[1].Status = "failed"
+	tunnels[2].Status = "failed"
+	conn, err := p.dial(SocksCred{}, "example.com:443")
+	if err != nil {
+		t.Fatalf("pool must skip failed tunnels: %v", err)
+	}
+	_ = conn.Close()
+	mu.Lock()
+	got := calls[len(calls)-1]
+	mu.Unlock()
+	if got != 4 {
+		t.Fatalf("expected only up tunnel 4 to be dialled, got %d", got)
+	}
+
+	if len(p.userConns) != 0 || len(p.tunnelConns) != 0 {
+		t.Fatalf("loopback pool leases leaked: users=%v tunnels=%v", p.userConns, p.tunnelConns)
+	}
+}
+
+func TestValidateProxyConfigAllowsLoopbackAggregate(t *testing.T) {
+	tunnels := map[int]*Tunnel{
+		1: {Slot: 1},
+		2: {Slot: 2},
+	}
+	// 仅本机监听时免认证汇聚，用户绑定不参与路由：空凭据、未知隧道都不拦。
+	cfg := ProxyConfig{
+		Mode:       EntryModeUnified,
+		Port:       19090,
+		ListenAddr: "127.0.0.1",
+		Users: []ProxyUser{
+			{User: "", Pass: "", TunnelSlots: []int{99}},
+		},
+	}
+	if err := validateProxyConfig(cfg, tunnels); err != nil {
+		t.Fatalf("loopback aggregate must skip user validation: %v", err)
+	}
+
+	// 切回外网监听后，用户必须满足原有约束。
+	cfg.ListenAddr = "0.0.0.0"
+	if err := validateProxyConfig(cfg, tunnels); err == nil {
+		t.Fatal("external listen must still enforce user validation")
+	}
+}

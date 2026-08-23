@@ -284,7 +284,7 @@ tunnel_hint() {
   fi
 
   echo
-  echo -e "  ${D}方式 B · 统一入口（curl / requests 等支持 SOCKS5 认证的客户端）${N}"
+  echo -e "  ${D}方式 B · 统一入口（监听地址设为仅本机时免认证，否则需用户名密码）${N}"
   echo -e "  ${D}统一入口端口在管理界面里可见。${N}"
   read -rp "  统一入口端口（留空跳过）: " sport
   if [[ -n $sport ]]; then
@@ -293,15 +293,15 @@ tunnel_hint() {
     echo
     echo -e "  客户端填："
     echo -e "    socks5://127.0.0.1:1080"
-    echo -e "    用户名/密码 统一入口里的用户名密码"
+    echo -e "    用户名/密码 统一入口里的用户名密码（监听地址设为仅本机时无需）"
   else
     echo -e "  ${D}（已跳过）${N}"
   fi
 
   echo
-  echo -e "  ${D}安全说明：流量走 SSH 加密；免认证只在该端口监听 127.0.0.1 时成立"
-  echo -e "  （设置 → 各隧道 SOCKS5 监听地址选“仅本机”）。别在 NAT 里映射"
-  echo -e "  SOCKS5 端口，公网就扫不到。${N}"
+  echo -e "  ${D}安全说明：流量走 SSH 加密；免认证只在端口监听 127.0.0.1 时成立"
+  echo -e "  （设置 → 各隧道 SOCKS5 监听地址，或统一入口监听地址，选“仅本机”）。"
+  echo -e "  别在 NAT 里映射 SOCKS5 端口，公网就扫不到。${N}"
 }
 
 # settings.json 里的 tls 开关。传 1 开 HTTPS、0 关，空参数只读。

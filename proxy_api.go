@@ -127,8 +127,11 @@ func (m *Manager) prepareProxyConfig(cfg *ProxyConfig) error {
 	}
 
 	tunnels := m.tunnelMap()
-	if err := validateProxyOwnership(*cfg, tunnels); err != nil {
-		return err
+	// 仅本机监听的统一入口免认证、自动汇聚全部隧道，不做用户归属校验。
+	if !(cfg.Mode == EntryModeUnified && loopbackOnly(cfg.ListenAddr)) {
+		if err := validateProxyOwnership(*cfg, tunnels); err != nil {
+			return err
+		}
 	}
 	if err := validateProxyConfig(*cfg, tunnels); err != nil {
 		return &proxyValidationError{err}
@@ -294,6 +297,9 @@ func (m *Manager) UpsertProxyUser(u ProxyUser) error {
 	s := proxyAPIStateFor(m)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if proxyFor(m).loopbackOnly() {
+		return &proxyValidationError{errors.New("仅本机监听的统一入口免认证，无需用户名密码；请切回外网监听后再管理用户")}
+	}
 	if strings.TrimSpace(u.User) == "" {
 		return &proxyValidationError{errors.New("proxy user is required")}
 	}

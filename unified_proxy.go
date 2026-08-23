@@ -17,6 +17,10 @@ const (
 	EntryModePerTunnel = "per-tunnel"
 	EntryModeUnified   = "unified"
 
+	// poolOwner 是免认证汇聚模式（仅本机监听）下所有连接共用的路由归属名，
+	// 用于连接计数与轮询游标；它不代表任何真实用户。
+	poolOwner = "pool"
+
 	ProxyStrategyRoundRobin = "round-robin"
 	ProxyStrategyRandom     = "random"
 	ProxyStrategyTime       = "time"
@@ -70,6 +74,12 @@ func validateProxyConfig(cfg ProxyConfig, tunnels map[int]*Tunnel) error {
 	}
 	if cfg.MaxConnUser < 0 || cfg.MaxConnTunnel < 0 {
 		return errors.New("connection limits cannot be negative")
+	}
+
+	// 仅本机监听的统一入口免认证并自动汇聚全部隧道，用户绑定不参与路由，
+	// 因此不校验用户名密码与隧道归属（切回外网监听后用户重新生效）。
+	if mode == EntryModeUnified && loopbackOnly(cfg.ListenAddr) {
+		return nil
 	}
 
 	owners := make(map[int]string)
@@ -252,8 +262,10 @@ func (p *unifiedProxy) serve(client net.Conn) {
 	relay(client, remote)
 }
 
-// handshake requires RFC 1929 username/password authentication. authNone is
-// never accepted by the unified entry point.
+// handshake authenticates the client. In normal mode it requires RFC 1929
+// username/password and authNone is never accepted. When the entry listens
+// only on loopback (127.0.0.1) it trusts SSH local forwarding as the
+// authentication boundary and accepts authNone without any credentials.
 func (p *unifiedProxy) handshake(c net.Conn) (SocksCred, error) {
 	head := make([]byte, 2)
 	if _, err := io.ReadFull(c, head); err != nil {
@@ -265,6 +277,14 @@ func (p *unifiedProxy) handshake(c net.Conn) (SocksCred, error) {
 	methods := make([]byte, int(head[1]))
 	if _, err := io.ReadFull(c, methods); err != nil {
 		return SocksCred{}, err
+	}
+	if p.loopbackOnly() {
+		// 仅本机监听：SSH 本地转发就是认证边界，免认证放行，
+		// 客户端直接填 socks5://127.0.0.1:<本地端口> 即可。
+		if _, err := c.Write([]byte{socksVer5, authNone}); err != nil {
+			return SocksCred{}, err
+		}
+		return SocksCred{}, nil
 	}
 	if !bytes.Contains(methods, []byte{authUserPass}) {
 		_, _ = c.Write([]byte{socksVer5, authNoAccept})
@@ -320,13 +340,23 @@ func (p *unifiedProxy) authenticate(cred SocksCred) bool {
 // failed attempt may try the next configured slot, but every attempt checks
 // that Tunnel is up and dials from that Tunnel's netns.
 func (p *unifiedProxy) dial(cred SocksCred, addr string) (net.Conn, error) {
-	user, ok := p.user(cred.User)
-	if !ok {
-		return nil, errors.New("unknown proxy user")
+	owner := cred.User
+	var slots []int
+	if p.loopbackOnly() {
+		// 仅本机监听：入口免认证，没有用户名可路由，直接汇聚全部在线隧道。
+		owner = poolOwner
+		slots = p.pooledSlots()
+	} else {
+		user, ok := p.user(cred.User)
+		if !ok {
+			return nil, errors.New("unknown proxy user")
+		}
+		owner = user.User
+		slots = p.candidates(user)
 	}
 
 	var lastErr error
-	for _, slot := range p.candidates(user) {
+	for _, slot := range slots {
 		tunnel, exists := p.manager.tunnel(slot)
 		if !exists {
 			lastErr = fmt.Errorf("tunnel %d is unavailable", slot)
@@ -336,7 +366,7 @@ func (p *unifiedProxy) dial(cred SocksCred, addr string) (net.Conn, error) {
 			lastErr = fmt.Errorf("tunnel %d is not up", slot)
 			continue
 		}
-		if !p.acquire(user.User, slot) {
+		if !p.acquire(owner, slot) {
 			lastErr = fmt.Errorf("tunnel %d connection limit reached", slot)
 			continue
 		}
@@ -346,11 +376,11 @@ func (p *unifiedProxy) dial(cred SocksCred, addr string) (net.Conn, error) {
 			return &countedConn{
 				Conn: conn,
 				release: func() {
-					p.release(user.User, slot)
+					p.release(owner, slot)
 				},
 			}, nil
 		}
-		p.release(user.User, slot)
+		p.release(owner, slot)
 		if err == nil {
 			err = errors.New("tunnel dial returned a nil connection")
 		}
@@ -367,6 +397,37 @@ func (p *unifiedProxy) dialThroughTunnel(tunnel *Tunnel, addr string) (net.Conn,
 		return p.dialTunnel(tunnel, addr)
 	}
 	return dialerInNetns(tunnel.nsName())("tcp", addr)
+}
+
+// loopbackOnly 报告统一入口是否只监听本机。仅本机时信任 SSH 本地转发作为
+// 认证边界：入口免认证，并自动汇聚全部隧道，无需统一用户用户名密码。
+func (p *unifiedProxy) loopbackOnly() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return loopbackOnly(p.cfg.ListenAddr)
+}
+
+// pooledSlots 返回免认证汇聚模式下全部在线隧道的槽位，按轮询顺序排好。
+// 没有用户名可路由，所有请求在在线隧道间轮流分配。
+func (p *unifiedProxy) pooledSlots() []int {
+	var slots []int
+	for _, t := range p.manager.Tunnels() {
+		if t.isUp() {
+			slots = append(slots, t.Slot)
+		}
+	}
+	if len(slots) < 2 {
+		return slots
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := p.cursors[poolOwner]
+	p.cursors[poolOwner] = n + 1
+	offset := int(n % uint64(len(slots)))
+	ordered := make([]int, 0, len(slots))
+	ordered = append(ordered, slots[offset:]...)
+	ordered = append(ordered, slots[:offset]...)
+	return ordered
 }
 
 func (p *unifiedProxy) user(name string) (ProxyUser, bool) {
