@@ -12,8 +12,9 @@ Xray、3x-ui、xray-cf-lite 的运行、安装、配置和管理界面均已禁�
 客户端 -> 统一入口（SOCKS5 或 HTTP CONNECT）-> 用户凭据 -> 用户专属 Tunnel -> 出口 IP
 客户端 -> 独立 Tunnel SOCKS5 入口 ---------------------------------------> 出口 IP
 
-统一入口共用一个端口：先看第一个字节，`0x05` 走 SOCKS5，其余按 HTTP
-代理处理（`CONNECT` 转发 HTTPS，绝对路径 `GET/POST` 转发明文 HTTP）。
+统一入口共用一个端口：先看第一个字节，`0x05` 走 SOCKS5，`0x16` 先做 TLS
+再按 HTTP 代理处理（客户端选「HTTPS 代理」时走这条），其余按明文 HTTP
+代理处理（`CONNECT` 转发 HTTPS/IMAP，绝对路径 `GET/POST` 转发明文 HTTP）。
 认证通过后从该用户的 Tunnel 池中按配置策略选择一条处于 up 状态的
 Tunnel。Tunnel 连接失败时直接返回错误，不回退到母机直连。不同用户的
 Tunnel 池独立管理，同一条 Tunnel 不会在用户之间共享。
@@ -26,8 +27,8 @@ Tunnel 池独立管理，同一条 Tunnel 不会在用户之间共享。
 bash <(curl -fsSL https://raw.githubusercontent.com/hugeww/fanout/main/install.sh)
 
 安装后运行 f 打开管理菜单。管理页面会显示统一入口、用户凭据、
-Tunnel 状态和出口 IP。复制用户凭据时会同时给出 `socks5://` 和 `http://`
-两种地址。
+Tunnel 状态和出口 IP。复制用户凭据时会同时给出 `socks5://`、`http://`
+和 `https://` 三种地址。
 
 ## 本地安全连 SOCKS5
 
@@ -39,10 +40,11 @@ Tunnel 状态和出口 IP。复制用户凭据时会同时给出 `socks5://` 和
 
 统一入口同样支持该模式：把“统一入口配置 → 监听地址”也选成“仅本机 127.0.0.1”，
 入口即免认证、自动汇聚所有 Tunnel 轮询出网，无需为每个用户配置用户名密码。
-同一端口可填 `socks5://127.0.0.1:1080` 或 `http://127.0.0.1:1080`（HTTP
-代理，HTTPS 网站走 CONNECT）。Playwright 也可用 HTTP 代理带用户名口令：
-`http://user:pass@host:port`。仍监听外网时统一入口照旧要求用户名密码并按
-用户路由到专属 Tunnel。
+同一端口可填 `socks5://127.0.0.1:1080`、`http://127.0.0.1:1080` 或
+`https://127.0.0.1:1080`。IMAP/取验证码客户端若选项是「HTTPS 代理」，必须用
+`https://`（先对入口 TLS）；选「HTTP 代理」则用 `http://`。未上传面板证书时
+HTTPS 入口用自签证书，客户端需关闭代理证书校验。仍监听外网时统一入口照旧
+要求用户名密码并按用户路由到专属 Tunnel。
 
 ## 运维
 

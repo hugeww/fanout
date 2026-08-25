@@ -87,10 +87,18 @@ func socksURL(host string, port int, cred SocksCred) string {
 	return fmt.Sprintf("socks5://%s:%s@%s:%d", cred.User, cred.Pass, host, port)
 }
 
-// httpURL 拼出同一端口上的 HTTP/HTTPS（CONNECT）代理地址。
+// httpURL 拼出同一端口上的 HTTP 代理地址（明文 CONNECT）。
 func httpURL(host string, port int, cred SocksCred) string {
 	if cred.User == "" {
 		return fmt.Sprintf("http://%s:%d", host, port)
 	}
 	return fmt.Sprintf("http://%s:%s@%s:%d", cred.User, cred.Pass, host, port)
+}
+
+// httpsURL 拼出同一端口上的 HTTPS 代理地址（先对入口做 TLS，再 CONNECT）。
+func httpsURL(host string, port int, cred SocksCred) string {
+	if cred.User == "" {
+		return fmt.Sprintf("https://%s:%d", host, port)
+	}
+	return fmt.Sprintf("https://%s:%s@%s:%d", cred.User, cred.Pass, host, port)
 }

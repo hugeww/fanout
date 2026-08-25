@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/base64"
 	"io"
 	"net"
@@ -100,6 +101,66 @@ func TestHTTPURL(t *testing.T) {
 	got = httpURL("1.2.3.4", 20000, SocksCred{})
 	if got != "http://1.2.3.4:20000" {
 		t.Fatalf("无凭据 URL 不对: %s", got)
+	}
+	got = httpsURL("1.2.3.4", 20000, SocksCred{User: "u", Pass: "p"})
+	if got != "https://u:p@1.2.3.4:20000" {
+		t.Fatalf("HTTPS 带凭据 URL 不对: %s", got)
+	}
+}
+
+func TestUnifiedProxyTLSConnect(t *testing.T) {
+	p, _ := newUnifiedProxyForTest([]ProxyUser{
+		{User: "alice", Pass: "secret", TunnelSlots: []int{1}},
+	}, 10, 10)
+
+	site, remote := net.Pipe()
+	defer site.Close()
+	dialed := make(chan string, 1)
+	p.dialTunnel = func(_ *Tunnel, addr string) (net.Conn, error) {
+		dialed <- addr
+		return remote, nil
+	}
+
+	server, client := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		p.serve(server)
+		close(done)
+	}()
+	defer func() {
+		_ = client.Close()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("serve did not return")
+		}
+	}()
+
+	_ = client.SetDeadline(time.Now().Add(8 * time.Second))
+	tlsClient := tls.Client(client, &tls.Config{InsecureSkipVerify: true})
+	if err := tlsClient.Handshake(); err != nil {
+		t.Fatalf("TLS handshake to unified entry: %v", err)
+	}
+	req := "CONNECT imap.gmail.com:993 HTTP/1.1\r\nHost: imap.gmail.com:993\r\nProxy-Authorization: " +
+		basicProxyAuth("alice", "secret") + "\r\n\r\n"
+	if _, err := io.WriteString(tlsClient, req); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tlsClient), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200", resp.StatusCode)
+	}
+	select {
+	case addr := <-dialed:
+		if addr != "imap.gmail.com:993" {
+			t.Fatalf("dialed %q", addr)
+		}
+	default:
+		t.Fatal("TLS CONNECT did not dial")
 	}
 }
 

@@ -96,6 +96,9 @@ func (p *unifiedProxy) serveHTTPConnect(client net.Conn, br *bufio.Reader, cred 
 		_ = writeHTTPProxyStatus(client, code, text)
 		return
 	}
+	// VPN Gate 建连可能超过入口握手的 30s 截止时间；拨号前先清掉，
+	// 否则客户端已经开始 TLS 时这边超时关连接，就会变成 UNEXPECTED_EOF。
+	_ = client.SetDeadline(time.Time{})
 	remote, err := p.dial(cred, addr)
 	if err != nil {
 		_ = writeHTTPProxyStatus(client, http.StatusBadGateway, "Bad Gateway")
@@ -105,7 +108,6 @@ func (p *unifiedProxy) serveHTTPConnect(client net.Conn, br *bufio.Reader, cred 
 	if _, err := io.WriteString(client, httpConnectEstablished); err != nil {
 		return
 	}
-	_ = client.SetDeadline(time.Time{})
 	_ = remote.SetDeadline(time.Time{})
 	relay(&bufferedConn{Conn: client, r: br}, remote)
 }
@@ -117,6 +119,7 @@ func (p *unifiedProxy) serveHTTPForward(client net.Conn, cred SocksCred, req *ht
 		_ = writeHTTPProxyStatus(client, code, text)
 		return err
 	}
+	_ = client.SetDeadline(time.Time{})
 	remote, err := p.dial(cred, addr)
 	if err != nil {
 		_ = writeHTTPProxyStatus(client, http.StatusBadGateway, "Bad Gateway")
@@ -127,7 +130,6 @@ func (p *unifiedProxy) serveHTTPForward(client net.Conn, cred SocksCred, req *ht
 	stripHopHeaders(req.Header)
 	req.RequestURI = ""
 	req.Close = false
-	_ = client.SetDeadline(time.Time{})
 	_ = remote.SetDeadline(time.Time{})
 	if err := req.Write(remote); err != nil {
 		return err

@@ -243,6 +243,10 @@ func (p *unifiedProxy) serve(client net.Conn) {
 		p.serveSOCKS(&bufferedConn{Conn: client, r: br})
 		return
 	}
+	if first[0] == tlsHandshakeRecord {
+		p.serveTLS(client, br)
+		return
+	}
 	p.serveHTTP(client, br)
 }
 
@@ -261,6 +265,7 @@ func (p *unifiedProxy) serveSOCKS(client net.Conn) {
 		return
 	}
 
+	_ = client.SetDeadline(time.Time{})
 	remote, err := p.dial(cred, addr)
 	if err != nil {
 		// There is deliberately no mother-host fallback here.
