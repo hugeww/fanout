@@ -291,8 +291,9 @@ tunnel_hint() {
     echo
     echo -e "    ssh -N -L 1080:127.0.0.1:${sport} root@${ip} -p ${sshport}"
     echo
-    echo -e "  客户端填："
+    echo -e "  客户端填（同一端口）："
     echo -e "    socks5://127.0.0.1:1080"
+    echo -e "    http://127.0.0.1:1080"
     echo -e "    用户名/密码 统一入口里的用户名密码（监听地址设为仅本机时无需）"
   else
     echo -e "  ${D}（已跳过）${N}"
@@ -498,7 +499,7 @@ menu() {
     echo "   3) 重启          4) 查看日志"
     echo
     echo "   5) 隧道列表      6) 连接信息"
-    echo "   7) 隧道访问（本地安全连 SOCKS5）"
+    echo "   7) 隧道访问（本地安全连 SOCKS5 / HTTP）"
     echo
     echo "   8) 改端口        9) 改口令"
     echo "  10) 改访问路径   11) 证书管理"

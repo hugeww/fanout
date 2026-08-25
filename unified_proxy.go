@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/subtle"
@@ -197,7 +198,7 @@ func (p *unifiedProxy) start(cfg ProxyConfig) error {
 	p.mu.Unlock()
 
 	go p.acceptLoop(ln)
-	log.Printf("unified SOCKS5 listening on %s", addr)
+	log.Printf("unified SOCKS5/HTTP listening on %s", addr)
 	return nil
 }
 
@@ -233,6 +234,19 @@ func (p *unifiedProxy) serve(client net.Conn) {
 	defer client.Close()
 	_ = client.SetDeadline(time.Now().Add(30 * time.Second))
 
+	br := bufio.NewReader(client)
+	first, err := br.Peek(1)
+	if err != nil {
+		return
+	}
+	if first[0] == socksVer5 {
+		p.serveSOCKS(&bufferedConn{Conn: client, r: br})
+		return
+	}
+	p.serveHTTP(client, br)
+}
+
+func (p *unifiedProxy) serveSOCKS(client net.Conn) {
 	cred, err := p.handshake(client)
 	if err != nil {
 		return
@@ -260,6 +274,18 @@ func (p *unifiedProxy) serve(client net.Conn) {
 	_ = client.SetDeadline(time.Time{})
 	_ = remote.SetDeadline(time.Time{})
 	relay(client, remote)
+}
+
+// bufferedConn exposes peeked bytes through Read while Write/Close still
+// go to the underlying connection. Used after protocol sniffing so SOCKS5
+// and HTTP CONNECT leftover bytes are not dropped.
+type bufferedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.r.Read(p)
 }
 
 // handshake authenticates the client. In normal mode it requires RFC 1929

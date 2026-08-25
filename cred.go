@@ -86,3 +86,11 @@ func socksURL(host string, port int, cred SocksCred) string {
 	}
 	return fmt.Sprintf("socks5://%s:%s@%s:%d", cred.User, cred.Pass, host, port)
 }
+
+// httpURL 拼出同一端口上的 HTTP/HTTPS（CONNECT）代理地址。
+func httpURL(host string, port int, cred SocksCred) string {
+	if cred.User == "" {
+		return fmt.Sprintf("http://%s:%d", host, port)
+	}
+	return fmt.Sprintf("http://%s:%s@%s:%d", cred.User, cred.Pass, host, port)
+}
